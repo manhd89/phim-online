@@ -1,9 +1,14 @@
 const axios = require('axios');
-const pLimit = require('p-limit');
 const { redis, BASE_URL, API_CONFIG, TTL } = require('../config');
 
+// Dynamically import p-limit
+let pLimit;
+(async () => {
+  const module = await import('p-limit');
+  pLimit = module.default;
+})();
+
 const PRECACHE_KEY_SET = 'movieapp:precached_keys';
-const limit = pLimit(10); // Concurrent requests limit
 
 async function fetchAllMovieSlugs() {
   const slugs = new Set();
@@ -115,7 +120,7 @@ async function cacheMovieDetail(slug, retries = 3) {
         console.error(`Max retries for ${slug}`);
         return null;
       }
-      await new Promise(resolve => setTimeout(resolve, 1001000 * attempt));
+      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
     }
   }
 }
@@ -175,6 +180,11 @@ async function preCacheMovies() {
     const slugs = await fetchAllMovieSlugs();
     console.log(`Found ${slugs.length} movies`);
 
+    // Wait for pLimit to be initialized
+    while (!pLimit) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    const limit = pLimit(10); // Concurrent requests limit
     const batchSize = 10;
     let successCount = 0;
     for (let i = 0; i < slugs.length; i += batchSize) {
@@ -201,4 +211,4 @@ module.exports = { preCacheMovies, fetchAllMovieSlugs, cacheMovieDetail, cacheSt
 
 if (require.main === module) {
   preCacheMovies();
-                      }
+}
