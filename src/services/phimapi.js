@@ -12,6 +12,7 @@ async function fetchApi(url, params = {}, retries = 3) {
               url.includes('phim-bo') ? TTL.SERIES : TTL.NEW_MOVIES;
 
   try {
+    // Check pre-cache
     if (await redis.sismember(PRECACHE_KEY_SET, cacheKey)) {
       const cached = await redis.get(cacheKey);
       if (cached) {
@@ -20,6 +21,7 @@ async function fetchApi(url, params = {}, retries = 3) {
       }
     }
 
+    // Check regular cache
     const cached = await redis.get(cacheKey);
     if (cached) {
       console.log(`Cache hit for ${url}`);
@@ -137,9 +139,10 @@ async function getMovieDetail(slug, forceRefresh = false, retries = 3) {
 
   const cacheKey = `movieapp:movie_${slug}`;
   try {
+    // Check pre-cache or regular cache
     if (!forceRefresh && (await redis.sismember(PRECACHE_KEY_SET, cacheKey))) {
       const cached = await redis.get(cacheKey);
-      if (cached && cached.movie?.status?.toLowerCase() !== 'ongoing') {
+      if (cached) {
         console.log(`Pre-cache hit for ${cacheKey}`);
         return cached;
       }
@@ -154,12 +157,14 @@ async function getMovieDetail(slug, forceRefresh = false, retries = 3) {
     console.error(`Redis get error for ${cacheKey}: ${error.message}`);
   }
 
+  // Fetch online and cache
   return await cacheMovieDetail(slug, retries);
 }
 
 async function getStreamDetail(slug, streamId, channelId) {
   const cacheKey = `movieapp:stream_detail_${streamId}`;
   try {
+    // Check pre-cache or regular cache
     if (await redis.sismember(PRECACHE_KEY_SET, cacheKey)) {
       const cached = await redis.get(cacheKey);
       if (cached) {
@@ -177,6 +182,7 @@ async function getStreamDetail(slug, streamId, channelId) {
     console.error(`Redis get error for ${cacheKey}: ${error.message}`);
   }
 
+  // Fetch movie details
   const movie = await getMovieDetail(slug, true);
   if (!movie?.movie) {
     console.error(`No movie found for slug: ${slug}`);
@@ -210,10 +216,9 @@ async function getStreamDetail(slug, streamId, channelId) {
     ],
   };
 
-  const ttl = movie.movie.status?.toLowerCase() === 'ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+  const ttl = movie.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
   await redis.set(cacheKey, response, { ex: ttl });
   await redis.sadd(PRECACHE_KEY_SET, cacheKey);
-  console.log(`Cached stream detail: ${streamId} with TTL ${ttl} seconds`);
   return response;
 }
 
