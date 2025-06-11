@@ -1,3 +1,4 @@
+// src/scripts/preCacheMovies.js
 const axios = require('axios');
 const { redis, BASE_URL, API_CONFIG, TTL } = require('../config');
 
@@ -80,7 +81,7 @@ async function cacheMovieDetail(slug, retries = 3) {
   const cacheKey = `movieapp:movie_${slug}`;
   try {
     const cached = await redis.get(cacheKey);
-    if (cached && cached.movie?.status !== 'Ongoing') {
+    if (cached && cached.movie?.status?.toLowerCase() !== 'ongoing') {
       console.log(`Cache hit for ${cacheKey}`);
       return cached;
     }
@@ -98,10 +99,19 @@ async function cacheMovieDetail(slug, retries = 3) {
         throw new Error('Invalid movie data');
       }
 
-      const ttl = data.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+      const status = data.movie.status?.toLowerCase();
+      const validStatuses = ['ongoing', 'completed'];
+      let ttl;
+      if (validStatuses.includes(status)) {
+        ttl = status === 'ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+        console.log(`Caching ${cacheKey} with TTL ${ttl} seconds (status: ${status})`);
+      } else {
+        console.log(`Caching ${cacheKey} without TTL (status: ${status || 'none'})`);
+      }
+
       try {
-        await redis.set(cacheKey, data, { ex: ttl });
-        await redis.set(`movieapp:id_to_slug_${data.movie._id}`, slug, { ex: ttl });
+        await redis.set(cacheKey, data, ttl ? { ex: ttl } : {});
+        await redis.set(`movieapp:id_to_slug_${data.movie._id}`, slug, ttl ? { ex: ttl } : {});
         await redis.sadd(PRECACHE_KEY_SET, cacheKey);
         console.log(`Cached movie: ${slug}`);
 
@@ -127,6 +137,16 @@ async function cacheMovieDetail(slug, retries = 3) {
 
 async function cacheStreamDetails(movieData, slug) {
   const movieId = movieData.movie._id;
+  const status = movieData.movie.status?.toLowerCase();
+  const validStatuses = ['ongoing', 'completed'];
+  let ttl;
+  if (validStatuses.includes(status)) {
+    ttl = status === 'ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+    console.log(`Caching stream details for ${slug} with TTL ${ttl} seconds (status: ${status})`);
+  } else {
+    console.log(`Caching stream details for ${slug} without TTL (status: ${status || 'none'})`);
+  }
+
   (movieData.episodes || []).forEach((server, serverIndex) => {
     (server.server_data || []).forEach(async (episode, episodeIndex) => {
       const streamId = `${movieId}_${serverIndex}_${episodeIndex}`;
@@ -144,8 +164,7 @@ async function cacheStreamDetails(movieData, slug) {
       };
 
       try {
-        const ttl = movieData.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
-        await redis.set(cacheKey, response, { ex: ttl });
+        await redis.set(cacheKey, response, ttl ? { ex: ttl } : {});
         await redis.sadd(PRECACHE_KEY_SET, cacheKey);
         console.log(`Cached stream detail: ${streamId}`);
       } catch (error) {
@@ -204,6 +223,8 @@ async function preCacheMovies() {
   } catch (error) {
     console.error(`Pre-cache failed: ${error.message}`);
     process.exit(1);
+  } finally {
+    await redis.quit();
   }
 }
 
