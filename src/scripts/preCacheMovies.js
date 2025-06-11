@@ -1,9 +1,14 @@
 const axios = require('axios');
-const pLimit = require('p-limit');
 const { redis, BASE_URL, API_CONFIG, TTL } = require('../config');
 
+// Dynamically import p-limit
+let pLimit;
+(async () => {
+  const module = await import('p-limit');
+  pLimit = module.default;
+})();
+
 const PRECACHE_KEY_SET = 'movieapp:precached_keys';
-const limit = pLimit(10); // Concurrent requests limit
 
 async function fetchAllMovieSlugs() {
   const slugs = new Set();
@@ -75,7 +80,7 @@ async function cacheMovieDetail(slug, retries = 3) {
   const cacheKey = `movieapp:movie_${slug}`;
   try {
     const cached = await redis.get(cacheKey);
-    if (cached && cached.movie?.status?.toLowerCase() !== 'ongoing') {
+    if (cached && cached.movie?.status !== 'Ongoing') {
       console.log(`Cache hit for ${cacheKey}`);
       return cached;
     }
@@ -93,12 +98,12 @@ async function cacheMovieDetail(slug, retries = 3) {
         throw new Error('Invalid movie data');
       }
 
-      const ttl = data.movie.status?.toLowerCase() === 'ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+      const ttl = data.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
       try {
         await redis.set(cacheKey, data, { ex: ttl });
         await redis.set(`movieapp:id_to_slug_${data.movie._id}`, slug, { ex: ttl });
         await redis.sadd(PRECACHE_KEY_SET, cacheKey);
-        console.log(`Cached movie: ${slug} with TTL ${ttl} seconds`);
+        console.log(`Cached movie: ${slug}`);
 
         // Cache stream details
         await cacheStreamDetails(data, slug);
@@ -122,10 +127,8 @@ async function cacheMovieDetail(slug, retries = 3) {
 
 async function cacheStreamDetails(movieData, slug) {
   const movieId = movieData.movie._id;
-  const ttl = movieData.movie.status?.toLowerCase() === 'ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
-
-  for (const [serverIndex, server] of (movieData.episodes || []).entries()) {
-    for (const [episodeIndex, episode] of (server.server_data || []).entries()) {
+  (movieData.episodes || []).forEach((server, serverIndex) => {
+    (server.server_data || []).forEach(async (episode, episodeIndex) => {
       const streamId = `${movieId}_${serverIndex}_${episodeIndex}`;
       const cacheKey = `movieapp:stream_detail_${streamId}`;
       const response = {
@@ -141,14 +144,15 @@ async function cacheStreamDetails(movieData, slug) {
       };
 
       try {
+        const ttl = movieData.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
         await redis.set(cacheKey, response, { ex: ttl });
         await redis.sadd(PRECACHE_KEY_SET, cacheKey);
-        console.log(`Cached stream detail: ${streamId} with TTL ${ttl} seconds`);
+        console.log(`Cached stream detail: ${streamId}`);
       } catch (error) {
         console.error(`Redis set error for ${cacheKey}: ${error.message}`);
       }
-    }
-  }
+    });
+  });
 }
 
 async function verifyCacheData(slugs) {
@@ -176,6 +180,11 @@ async function preCacheMovies() {
     const slugs = await fetchAllMovieSlugs();
     console.log(`Found ${slugs.length} movies`);
 
+    // Wait for pLimit to be initialized
+    while (!pLimit) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    const limit = pLimit(10); // Concurrent requests limit
     const batchSize = 10;
     let successCount = 0;
     for (let i = 0; i < slugs.length; i += batchSize) {
