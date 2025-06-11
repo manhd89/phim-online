@@ -1,3 +1,4 @@
+// src/routes/index.js
 const express = require('express');
 const router = express.Router();
 const {
@@ -104,8 +105,18 @@ async function findSlugFromId(id) {
   const searchResult = await searchMovies(id, { limit: 1 });
   const foundMovie = searchResult?.items?.find(item => item._id === id);
   if (foundMovie) {
+    // Align TTL with movie status
+    const status = foundMovie.status?.toLowerCase();
+    const validStatuses = ['ongoing', 'completed'];
+    let ttl;
+    if (validStatuses.includes(status)) {
+      ttl = status === 'ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+      console.log(`Caching ${cacheKey} with TTL ${ttl} seconds (status: ${status})`);
+    } else {
+      console.log(`Caching ${cacheKey} without TTL (status: ${status || 'none'})`);
+    }
     try {
-      await redis.set(cacheKey, foundMovie.slug, { ex: TTL.MOVIE_DETAIL });
+      await redis.set(cacheKey, foundMovie.slug, ttl ? { ex: ttl } : {});
     } catch (error) {
       console.error(`Redis set error for ${cacheKey}: ${error.message}`);
     }
@@ -402,7 +413,17 @@ router.get('/movie-detail', async (req, res, next) => {
       return res.status(404).json({ error: `Không tìm thấy phim cho uid: ${uid}` });
     }
 
-    await redis.set(`movieapp:movie_by_channel_${movie.movie._id}`, movie, { ex: TTL.MOVIE_DETAIL });
+    // Align TTL with movie status
+    const status = movie.movie.status?.toLowerCase();
+    const validStatuses = ['ongoing', 'completed'];
+    let ttl;
+    if (validStatuses.includes(status)) {
+      ttl = status === 'ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+      console.log(`Caching ${cacheKey} with TTL ${ttl} seconds (status: ${status})`);
+    } else {
+      console.log(`Caching ${cacheKey} without TTL (status: ${status || 'none'})`);
+    }
+    await redis.set(`movieapp:movie_by_channel_${movie.movie._id}`, movie, ttl ? { ex: ttl } : {});
 
     const isSeries = (movieData) => {
       const movieType = movieData.type || '';
@@ -468,7 +489,7 @@ router.get('/movie-detail', async (req, res, next) => {
       sources,
     };
 
-    await redis.set(cacheKey, response, { ex: movie.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL });
+    await redis.set(cacheKey, response, ttl ? { ex: ttl } : {});
     res.json(response);
   } catch (error) {
     console.error(`Lỗi trong /movie-detail: ${error.message}`);
@@ -521,6 +542,17 @@ router.get('/share-movie', async (req, res, next) => {
 
     if (!movie?.movie) return res.status(404).json({ error: `Không tìm thấy phim cho uid: ${uid}` });
 
+    // Align TTL with movie status
+    const status = movie.movie.status?.toLowerCase();
+    const validStatuses = ['ongoing', 'completed'];
+    let ttl;
+    if (validStatuses.includes(status)) {
+      ttl = status === 'ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+      console.log(`Caching ${cacheKey} with TTL ${ttl} seconds (status: ${status})`);
+    } else {
+      console.log(`Caching ${cacheKey} without TTL (status: ${status || 'none'})`);
+    }
+
     const response = {
       channel: (await processMovies([movie.movie], baseUrl))[0],
       provider: {
@@ -532,7 +564,7 @@ router.get('/share-movie', async (req, res, next) => {
       },
     };
 
-    await redis.set(cacheKey, response, { ex: movie.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL });
+    await redis.set(cacheKey, response, ttl ? { ex: ttl } : {});
     res.json(response);
   } catch (error) {
     console.error(`Lỗi trong /share-movie: ${error.message}`);
