@@ -1,253 +1,120 @@
+// src/services/phimapi.js
 const axios = require('axios');
 const { redis, BASE_URL, API_CONFIG, TTL } = require('../config');
-const { cacheMovieDetail, cacheStreamDetails } = require('../scripts/preCacheMovies');
 
-const PRECACHE_KEY_SET = 'movieapp:precached_keys';
-
-async function fetchApi(url, params = {}, retries = 3) {
-  const cacheKey = `movieapp:api_${url}_${JSON.stringify(params)}`;
-  const ttl = url.includes('the-loai') ? TTL.CATEGORIES :
-              url.includes('quoc-gia') ? TTL.COUNTRIES :
-              url.includes('phim-moi-cap-nhat') ? TTL.NEW_MOVIES :
-              url.includes('phim-bo') ? TTL.SERIES : TTL.NEW_MOVIES;
-
+async function fetchApi(url, options = {}) {
+  const cacheKey = `movieapp:${url}`;
   try {
-    // Check pre-cache
-    if (await redis.sismember(PRECACHE_KEY_SET, cacheKey)) {
-      const cached = await redis.get(cacheKey);
-      if (cached) {
-        console.log(`Pre-cache hit for ${url}`);
-        return cached;
-      }
-    }
-
-    // Check regular cache
     const cached = await redis.get(cacheKey);
-    if (cached) {
-      console.log(`Cache hit for ${url}`);
-      return cached;
-    }
-  } catch (error) {
-    console.error(`Redis get error for ${cacheKey}: ${error.message}`);
-  }
+    if (cached) return cached;
 
-  let attempt = 0;
-  while (attempt < retries) {
-    try {
-      const response = await axios.get(url, {
-        ...API_CONFIG,
-        params: { ...API_CONFIG.defaultParams, ...params },
-      });
-      let data = response.data;
-      if (!data) data = { items: [], totalPages: 0 };
-      if (data.data) data = data.data;
-      if (!data.items) data.items = Array.isArray(data) ? data : [];
-      if (!data.totalPages) {
-        data.totalPages =
-          data.pagination?.totalPages ||
-          data.params?.pagination?.totalPages ||
-          data.total_pages ||
-          0;
-        if (data.totalPages === 0 && data.items.length === params.limit) {
-          const nextPage = (params.page || 1) + 1;
-          const nextUrl = url.replace(`page=${params.page}`, `page=${nextPage}`);
-          const nextResponse = await axios.get(nextUrl, {
-            ...API_CONFIG,
-            params: { ...API_CONFIG.defaultParams, ...params, page: nextPage },
-          });
-          const nextData = nextResponse.data.data || nextResponse.data;
-          data.totalPages = nextData.items?.length > 0 ? nextPage + 1 : nextPage;
-        }
-      }
-      console.log(`Fetched ${url}: ${data.items.length} items`);
+    let response;
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await redis.set(cacheKey, data, { ex: ttl });
-        await redis.sadd(PRECACHE_KEY_SET, cacheKey);
+        response = await axios.get(url, { ...API_CONFIG, ...options });
+        break;
       } catch (error) {
-        console.error(`Redis set error for ${cacheKey}: ${error.message}`);
+        if (attempt === 2) throw error;
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
       }
-      return data;
-    } catch (error) {
-      attempt++;
-      console.error(`Attempt ${attempt} failed for ${url}: ${error.message}`);
-      if (attempt >= retries) {
-        console.error(`Max retries reached for ${url}`);
-        return { items: [], totalPages: 0 };
-      }
-      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
     }
+
+    let data = response.data?.data || response.data;
+    data = Array.isArray(data) ? data : data.items || [];
+
+    // Set TTL for movie details based on status
+    if (url.includes('/phim/') && data.movie && data.movie.status) {
+      const validStatuses = ['ongoing', 'completed'];
+      if (validStatuses.includes(data.movie.status)) {
+        const ttl = data.movie.status === 'ongoing' ? TTL.SERIES : TTL.DETAILS;
+        console.log(`Caching ${url} with TTL ${ttl} seconds (status: ${data.movie.status})`);
+        await redis.set(cacheKey, data, { ex: ttl });
+      } else {
+        console.log(`Caching ${url} without TTL (invalid status: ${data.movie.status})`);
+        await redis.set(cacheKey, data);
+      }
+    } else {
+      // Non-movie data or missing status: cache without TTL
+      console.log(`Caching ${url} without TTL (no status or non-movie data)`);
+      await redis.set(cacheKey, data);
+    }
+
+    return data;
+  } catch (error) {
+    console.error(`Error fetching ${url}: ${error.message}`);
+    return { items: [], totalPages: 0 };
+  }
+}
+
+async function cacheMovieDetail(slug) {
+  try {
+    const cacheKey = `movieapp:${BASE_URL}/phim/${slug}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return cached;
+
+    const data = await fetchApi(`${BASE_URL}/phim/${slug}`);
+    if (!data?.movie?._id) {
+      console.error(`Invalid movie data for slug: ${slug}`);
+      return null;
+    }
+
+    // TTL already handled by fetchApi, but log for clarity
+    console.log(`Cached movie detail for slug: ${slug} (status: ${data.movie.status || 'none'})`);
+    return data;
+  } catch (error) {
+    console.error(`Error caching movie ${slug}: ${error.message}`);
+    return null;
   }
 }
 
 async function getCategories() {
-  const cacheKey = 'movieapp:categories_version';
-  const currentVersion = await redis.get(cacheKey) || '1';
-  const dataKey = `movieapp:categories_${currentVersion}`;
-  let data = await redis.get(dataKey);
-  if (!data) {
-    data = await fetchApi(`${BASE_URL}/the-loai`);
-    await redis.set(dataKey, data, { ex: TTL.CATEGORIES });
-    await redis.set(cacheKey, currentVersion, { ex: TTL.CATEGORIES });
-  }
+  const data = await fetchApi(`${BASE_URL}/the-loai`);
   return Array.isArray(data) ? data : data.items || [];
 }
 
 async function getCountries() {
-  const cacheKey = 'movieapp:countries_version';
-  const currentVersion = await redis.get(cacheKey) || '1';
-  const dataKey = `movieapp:countries_${currentVersion}`;
-  let data = await redis.get(dataKey);
-  if (!data) {
-    data = await fetchApi(`${BASE_URL}/quoc-gia`);
-    await redis.set(dataKey, data, { ex: TTL.COUNTRIES });
-    await redis.set(cacheKey, currentVersion, { ex: TTL.COUNTRIES });
-  }
+  const data = await fetchApi(`${BASE_URL}/quoc-gia`);
   return Array.isArray(data) ? data : data.items || [];
 }
 
-async function getNewMovies(page = 1, limit = 20) {
-  return await fetchApi(`${BASE_URL}/danh-sach/phim-moi-cap-nhat`, { page, limit });
+async function getNewMovies(page = 1) {
+  const data = await fetchApi(`${BASE_URL}/danh-sach/phim-moi-cap-nhat?page=${page}`);
+  return { items: data.items || [], totalPages: data.totalPages || 0 };
 }
 
-async function getMoviesByType(type, page = 1, limit = 20) {
-  return await fetchApi(`${BASE_URL}/v1/api/danh-sach/${type}`, { page, limit });
+async function getMoviesByType(type, page = 1, size = 36) {
+  const data = await fetchApi(`${BASE_URL}/danh-sach/${type}?page=${page}&limit=${size}`);
+  return { items: data.items || [], totalPages: data.totalPages || 0 };
 }
 
-async function getMoviesByCategory(slug, page = 1, limit = 20) {
-  return await fetchApi(`${BASE_URL}/v1/api/the-loai/${slug}`, { page, limit });
+async function getMoviesByCategory(slug, page = 1, size = 36) {
+  const data = await fetchApi(`${BASE_URL}/the-loai/${slug}?page=${page}&limit=${size}`);
+  return { items: data.items || [], totalPages: data.totalPages || 0 };
 }
 
-async function getMoviesByCountry(slug, page = 1, limit = 20) {
-  return await fetchApi(`${BASE_URL}/v1/api/quoc-gia/${slug}`, { page, limit });
+async function getMoviesByCountry(slug, page = 1, size = 36) {
+  const data = await fetchApi(`${BASE_URL}/quoc-gia/${slug}?page=${page}&limit=${size}`);
+  return { items: data.items || [], totalPages: data.totalPages || 0 };
 }
 
-async function searchMovies(keyword, params = {}) {
-  const query = new URLSearchParams({
-    keyword,
-    page: params.page || 1,
-    limit: params.limit || 20,
-    ...params,
-  }).toString();
-  return await fetchApi(`${BASE_URL}/v1/api/tim-kiem?${query}`);
+async function searchMovies(keyword, page = 1, size = 12) {
+  const data = await fetchApi(`${BASE_URL}/tim-kiem?keyword=${encodeURIComponent(keyword)}&page=${page}&limit=${size}`);
+  return { items: data.items || [], totalPages: data.totalPages || 0 };
 }
 
-async function getMovieDetail(slug, forceRefresh = false, retries = 3) {
-  if (!slug || typeof slug !== 'string' || slug.includes('/')) {
-    console.error(`Invalid slug: ${slug}`);
-    return { movie: null, episodes: [] };
-  }
-
-  const cacheKey = `movieapp:movie_${slug}`;
-  try {
-    // Check pre-cache or regular cache
-    if (!forceRefresh && (await redis.sismember(PRECACHE_KEY_SET, cacheKey))) {
-      const cached = await redis.get(cacheKey);
-      if (cached) {
-        console.log(`Pre-cache hit for ${cacheKey}`);
-        return cached;
-      }
-    }
-
-    const cached = await redis.get(cacheKey);
-    if (cached && !forceRefresh) {
-      console.log(`Cache hit for ${slug}`);
-      return cached;
-    }
-  } catch (error) {
-    console.error(`Redis get error for ${cacheKey}: ${error.message}`);
-  }
-
-  // Fetch online and cache
-  return await cacheMovieDetail(slug, retries);
+async function getMovieDetail(slug) {
+  return await cacheMovieDetail(slug);
 }
 
-async function getStreamDetail(slug, streamId, channelId) {
-  const cacheKey = `movieapp:stream_detail_${streamId}`;
-  try {
-    // Check pre-cache or regular cache
-    if (await redis.sismember(PRECACHE_KEY_SET, cacheKey)) {
-      const cached = await redis.get(cacheKey);
-      if (cached) {
-        console.log(`Pre-cache hit for ${cacheKey}`);
-        return cached;
-      }
-    }
-
-    const cached = await redis.get(cacheKey);
-    if (cached) {
-      console.log(`Cache hit for ${cacheKey}`);
-      return cached;
-    }
-  } catch (error) {
-    console.error(`Redis get error for ${cacheKey}: ${error.message}`);
-  }
-
-  // Fetch movie details
-  const movie = await getMovieDetail(slug, true);
-  if (!movie?.movie) {
-    console.error(`No movie found for slug: ${slug}`);
-    return null;
-  }
-
-  const [movieId, serverIndexStr, episodeIndexStr] = streamId.split('_');
-  const serverIndex = parseInt(serverIndexStr, 10);
-  const episodeIndex = parseInt(episodeIndexStr, 10);
-
-  if (movieId !== movie.movie._id || isNaN(serverIndex) || isNaN(episodeIndex)) {
-    console.error(`Invalid streamId format: ${streamId}`);
-    return null;
-  }
-
-  const episode = movie.episodes?.[serverIndex]?.server_data?.[episodeIndex];
-  if (!episode) {
-    console.error(`No episode found for streamId: ${streamId}`);
-    return null;
-  }
-
-  const response = {
-    stream_links: [
-      {
-        id: `default_${movieId}_${serverIndex}_${episodeIndex}`,
-        name: episode.name || `Episode ${episodeIndex + 1}`,
-        type: 'hls',
-        default: false,
-        url: episode.link_m3u8 || '',
-      },
-    ],
-  };
-
-  const ttl = movie.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
-  await redis.set(cacheKey, response, { ex: ttl });
-  await redis.sadd(PRECACHE_KEY_SET, cacheKey);
-  return response;
+async function getStreamDetail(slug, streamId) {
+  const data = await fetchApi(`${BASE_URL}/xem-phim/${slug}/${streamId}`);
+  return data?.movie || null;
 }
 
 async function getMultipleMovieDetails(slugs) {
-  try {
-    const cacheKeys = slugs.map(slug => `movieapp:movie_${slug}`);
-    const results = await redis.mget(...cacheKeys);
-
-    const movieDetails = results.map((data, index) => {
-      if (data) {
-        console.log(`Cache hit for movie_${slugs[index]}`);
-        return data;
-      }
-      return null;
-    });
-
-    const missingSlugs = slugs.filter((slug, index) => !movieDetails[index]);
-    if (missingSlugs.length > 0) {
-      const fetchedDetails = await Promise.all(missingSlugs.map(slug => cacheMovieDetail(slug)));
-      fetchedDetails.forEach((data, index) => {
-        const slugIndex = slugs.indexOf(missingSlugs[index]);
-        movieDetails[slugIndex] = data;
-      });
-    }
-    return movieDetails;
-  } catch (error) {
-    console.error(`Redis mget error: ${error.message}`);
-    return Promise.all(slugs.map(slug => cacheMovieDetail(slug)));
-  }
+  const promises = slugs.map(slug => cacheMovieDetail(slug));
+  const results = await Promise.all(promises);
+  return results.filter(Boolean);
 }
 
 module.exports = {
@@ -261,4 +128,5 @@ module.exports = {
   getMovieDetail,
   getStreamDetail,
   getMultipleMovieDetails,
+  cacheMovieDetail,
 };
