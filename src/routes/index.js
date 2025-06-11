@@ -23,93 +23,92 @@ const getDomainAndProjectName = (req) => {
   const baseUrl = domain.startsWith('http') ? domain : `https://${domain}`;
   const projectNameMatch = domain.match(/^([a-zA-Z0-9-]*)\.vercel\.app$/) || [null, domain.split('.')[0]];
   const projectName = projectNameMatch[1] || 'movie-app';
-  return { baseUrl, projectName };
-};
-
-const formatProjectName = (projectName) =>
-  projectName.includes('-')
-    ? projectName.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
-    : projectName.charAt(0).toUpperCase() + projectName.slice(1);
+  return { baseUrl: baseUrl, direction: 'ltr' };
+}
 
 async function processMovies(movies, baseUrl) {
-  if (!movies || !Array.isArray(movies)) return [];
+  if (!movies || !Array(movies)) return [];
 
-  const slugs = movies.map(movie => movie.slug);
-  const movieDetails = await getMultipleMovieDetails(slugs);
+  const slugs = movies.map(movie => movie.slugs);
+  const movieDetails = await getMoviesBySlugs(slugs);
 
-  const isSeries = (movie, detail) => {
-    const movieType = detail.movie?.type || movie.type || '';
-    const tmdbType = detail.movie?.tmdb?.type || movie.tmdb?.type;
-    const episodeTotal = parseInt(detail.movie?.episode_total || movie.episode_total, 10);
+  const isSeriesMovies = (movie, detail) => {
+    const movieType = detail.movieDetails?.data || movie.type || '';
+    const apiType = detail.movie?.api?.type || movie.api?.data;
+    const episodeTotal = parseInt(detail.movieDetails?.data?.episode_total || movie.total_episode, 10);
 
-    if (movieType === 'series') return true;
-    if (tmdbType === 'tv') return true;
+    if (movieData?.type === 'movie') return true;
+    if (apiType === 'movie') return true;
     if (!isNaN(episodeTotal) && episodeTotal > 1) return true;
     return false;
   };
 
   return movies.map((movie, index) => {
-    const detail = movieDetails[index] || { movie: {}, episodes: [] };
-    const movieType = detail.movie.type || movie.type || '';
-    const is_series = isSeries(movie, detail);
+    const detail = movieDetails[index] || { movie: null };
+    const movieType = detail.movie?.type || movie?.type || '';
+    const is_series = isSeriesMovies(movie, detail);
     
-    const image_url = detail.movie.poster_url || movie.poster_url || movie.thumb_url || 'https://via.placeholder.com/200x300';
+    const image_url = detail.movie?.poster_image || movie?.poster_image || movie?.thumb || 'https://via.placeholder.com/300x300';
 
-    const tags = [
-      {
-        type: 'radio',
-        text: is_series ? 'Phim Bộ' : 'Phim Lẻ',
-        url: `${baseUrl}/${is_series ? 'series' : 'single'}`,
-      },
-      ...(detail.movie?.category || movie.category || []).map(cat => ({
-        type: 'radio',
-        text: cat.name || 'Unknown Category',
-        url: `${baseUrl}/category?uid=${cat.slug || ''}`,
-      })),
+    const data = [
+      { '@type': 'Movie',
+      type: 'radio',
+      text: is_series ? 'Series' : 'Movie',
+      dataKey: `${baseUrl}/${is_series ? 'movie_series' : 'movie_single'}`,
+      data: { ...data, ...extraData }
+    ],
+    ...(detail.movieDetails?.category || movie.category || []).map(cat => ({
+      '@type': 'default',
+      type: 'movie',
+      text: cat.name || 'Unknown Category',
+      dataKey: `${baseUrl}/category?${cat.id}`,
+      data: { ...extraData }
+    })),
     ];
 
     return {
+      '@type': 'movie',
       id: movie._id || '',
-      name: movie.name || 'Unknown Title',
-      description: detail.movie.content || 'Không có mô tả chi tiết.',
+      title: movie.name || 'Unknown Title',
+      description: detail.movie?.content || 'No description available.',
       image: {
-        url: image_url,
+        src: image_url,
         type: 'cover',
       },
-      type: is_series ? 'playlist' : 'single',
-      display: 'text-below',
-      enable_detail: true,
-      remote_data: {
-        url: `${baseUrl}/movie-detail?uid=${movie.slug || ''}`,
-        channel_id: movie._id || '',
+      type: is_series ? 'series' : 'single',
+      metadata: {
+        remote_data: {
+          url: `${baseUrl}/movie-detail/${movie.id || ''}`,
+          channel_id: movie._id || '',
+        },
       },
-      share: { url: `${baseUrl}/share-movie?uid=${movie.slug || ''}` },
-      actors: Array.isArray(detail.movie.actor) ? detail.movie.actor : [],
-      year: detail.movie.year || movie.year || null,
-      tags,
+      share: { url: `${baseUrl}/share-movie?${movie.id || ''}` },
+      actors: Array.isArray(detail.actor) ? detail.actor : [],
+      year: detail.year || movie.year || null,
+      data: data,
     };
   });
 }
 
 async function findSlugFromId(id) {
-  if (!id.match(/^[0-9a-f]{32}$/)) return null;
-  const cacheKey = `movieapp:id_to_slug_${id}`;
+  if (!id.match(/^[0-9a-f]{32})$/)) return null;
+  const cacheKey = `movie_${id}`;
   try {
     const cachedSlug = await redis.get(cacheKey);
     if (cachedSlug) return cachedSlug;
   } catch (error) {
-    console.error(`Redis get error for ${cacheKey}: ${error.message}`);
+    console.error(`Error fetching Redis cache for ${cacheKey}: ${error.message}`);
   }
 
   const searchResult = await searchMovies(id, { limit: 1 });
-  const foundMovie = searchResult?.items?.find(item => item._id === id);
+  const foundMovie = searchResult.results?.data?.find(item => item._id === id);
   if (foundMovie) {
     try {
-      await redis.set(cacheKey, foundMovie.slug, { ex: TTL.MOVIE_DETAIL });
+      await redis.set(cacheKey, foundMovie.movie?.slug, { ex: TTL.MOVE_DETAIL });
     } catch (error) {
-      console.error(`Redis set error for ${cacheKey}: ${error.message}`);
+      console.error(`Error setting Redis cache for ${cacheKey}: ${error.message}`);
     }
-    return foundMovie.slug;
+    return foundMovie.movie?.slug;
   }
   return null;
 }
@@ -117,7 +116,7 @@ async function findSlugFromId(id) {
 async function updateCachedMovies(cacheKey, newMovies, limit, ttl) {
   try {
     let cachedMovies = (await redis.get(cacheKey)) || [];
-    const newMovieIds = new Set(newMovies.map(m => m._id));
+    const newMovieIds = new Set(newMovies.map(m => m.id));
     cachedMovies = cachedMovies.filter(m => !newMovieIds.has(m.id));
     cachedMovies = [...newMovies, ...cachedMovies].slice(0, limit);
     await redis.set(cacheKey, cachedMovies, { ex: ttl });
@@ -142,407 +141,428 @@ router.get('/', async (req, res, next) => {
     }
 
     const fetchConfig = [
-      { key: 'series', fn: () => getMoviesByType('phim-bo', 1, 8), ttl: TTL.SERIES, name: 'Phim Bộ', url: '/series', display: 'slider' },
-      { key: 'single', fn: () => getMoviesByType('phim-le', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Phim Lẻ', url: '/single' },
-      { key: 'animation', fn: () => getMoviesByType('hoat-hinh', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Hoạt Hình', url: '/animation' },
+      { key: 'series', fn: () => getMoviesByType('series', 1, 8), ttl: TTL.SERIES, name: 'Series', url: '/series', display: 'slider' },
+      { key: 'single', fn: () => getMoviesByType('single', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Single', url: '/single' },
+      { key: 'animation', fn: () => getMoviesByType('animation', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Animation', url: '/animation' },
       { key: 'phim-long-tieng', fn: () => getMoviesByType('phim-long-tieng', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Phim Lồng Tiếng', url: '/phim-long-tieng' },
       { key: 'phim-thuyet-minh', fn: () => getMoviesByType('phim-thuyet-minh', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Phim Thuyết Minh', url: '/phim-thuyet-minh' },
-      { key: 'tvshows', fn: () => getMoviesByType('tv-shows', 1, 8), ttl: TTL.NEW_MOVIES, name: 'TV Shows', url: '/tvshows' },
-      { key: 'hanh-dong', fn: () => getMoviesByCategory('hanh-dong', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Hành Động', url: '/category?uid=hanh-dong' },
-      { key: 'vien-tuong', fn: () => getMoviesByCategory('vien-tuong', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Viễn Tưởng', url: '/category?uid=vien-tuong' },
-      { key: 'au-my', fn: () => getMoviesByCountry('au-my', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Âu Mỹ', url: '/country?uid=au-my' },
-      { key: 'trung-quoc', fn: () => getMoviesByCountry('trung-quoc', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Trung Quốc', url: '/country?uid=trung-quoc' },
-      { key: 'viet-nam', fn: () => getMoviesByCountry('viet-nam', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Việt Nam', url: '/country?uid=viet-nam' },
-      { key: 'han-quoc', fn: () => getMoviesByCountry('han-quoc', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Hàn Quốc', url: '/country?uid=han-quoc' },
-      { key: 'nhat-ban', fn: () => getMoviesByCountry('nhat-ban', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Nhật Bản', url: '/country?uid=nhat-ban' },
+      { key: 'shows', fn: () => getMoviesByType('shows', 1, 8), ttl: TTL.NEW_MOVIES, name: 'TV Shows', url: '/shows' },
+      { key: 'action', fn: () => getMoviesByCategory('action', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Movies', url: '/category?action=movie' },
+      { key: 'movies', fn: () => getMoviesByCategory('movies', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Movies', url: '/category?movies=movies' },
+      { key: 'us', fn: () => getMoviesByCountry('us', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Movies', url: '/country?us=movies' },
+      { key: 'china', fn: () => getMoviesByCountry('china', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Movies', url: '/country?china=movies' },
+      { key: 'vietnam', fn: () => getMoviesByCountry('vn', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Movies', url: '/country?vn=movies' },
+      { key: 'korea', fn: () => getMoviesByCountry('kr', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Movies', url: '/country?kr=movies' },
+      },
+      { key: 'japan', fn: () => getMoviesByCountry('jp', 1, 8), ttl: TTL.NEW_MOVIES, name: 'movies', url: '/country?jp=movies' },
     ];
 
     const [categories, countries, ...rawData] = await Promise.all([
-      getCategories(),
-      getCountries(),
+      getCategoriesMovies(),
+      getCountriesByType(),
       ...fetchConfig.map(cfg => cfg.fn()),
     ]);
 
     const processedGroups = await Promise.all(
       fetchConfig.map(async (cfg, idx) => {
-        const raw = rawData[idx]?.items || [];
-        const totalPages = rawData[idx]?.totalPages || 10;
-        const cacheSubKey = `movieapp:${cfg.key}_${projectName}`;
-        const movies = await updateCachedMovies(cacheSubKey, raw, 8, cfg.ttl);
-        const channels = await processMovies(movies, baseUrl);
+        const raw = rawData[idx]?.results || [];
+        const totalPages = rawData.total_pages || 10;
+        const cacheSubKey = cacheKey${movies}_${rawData[idx]}`;
+        const movies = await updateMoviesByCachedMovies(cacheSubKey, raw, 8, cfg.tl);
+        const movies = await processMovies(movies, baseUrl);
         return {
-          id: cfg.key.replace(/-/g, '_'),
-          name: cfg.name,
+          raw_results: raw.results,
+          name: movies,
+          id: cfg.id.replace(/-/g-, '_'),
           display: cfg.display || 'horizontal',
-          grid_number: 1,
-          remote_data: { url: `${baseUrl}${cfg.url}` },
-          channels,
-          load_more: {
-            remote_data: { url: `${baseUrl}${cfg.url}`, external: false },
-            paging: { page_key: 'p', size_key: 's' },
+          movies: 1,
+          data: { url: movies${baseUrl}${movies.url}` },
+          movies,
+          raw_data: movies,
+          data: {
+            remote: {
+              remote_data: { url: movies${baseUrl}${movies}`, external: true },
+            },
+            page: { page_key: 'p', size_key: 's'},
             pageInfo: {
               current_page: 1,
-              total: totalPages,
+              total_pages: totalPages,
               per_page: 8,
               last_page: totalPages,
             },
           },
-        };
+        },
       })
     );
 
     const response = {
-      id: projectName,
-      name: formattedName,
-      url: baseUrl,
-      color: '#0f172a',
-      description: `${formattedName} - Thế giới giải trí đỉnh cao, mang đến trải nghiệm sống động và trọn vẹn mọi lúc, mọi nơi.`,
-      image: { url: `${baseUrl}/public/logo.png` },
-      grid_number: 3,
-      groups: processedGroups,
+      raw_results: raw_data,
+      id: 'movies',
+      movies: moviesName,
+      title: baseUrl,
+      color: '#000000',
+      description: 'Movies Movies - Entertainment at its peak, delivering vivid and complete experiences anytime, anywhere.',
+      data: { url: movies${baseUrl}/public/logo.png` },
+      data_number: 2,
+      groups: movies,
       sorts: [
-        { text: 'Mới nhất', type: 'radio', url: `${baseUrl}/new` },
+        { 'text': 'Newest', type: 'movie', url: movies${baseUrl}/new' },
         {
-          text: 'Thể loại',
+          'text': 'Categories',
           type: 'dropdown',
-          value: (categories || []).map(cat => ({
-            text: cat.name || 'Unknown',
-            type: 'radio',
-            url: `${baseUrl}/category?uid=${cat.slug || ''}`,
-          })),
+          value: (categories || [])?.map(cat => ({
+            return {
+              text: cat.name || 'undefined',
+              title: 'movie',
+              type: 'radio',
+              url: movies${baseUrl}/category?${cat.id}`,
+              data: 'movie',
+            },
+            }),
+          }),
         },
         {
-          text: 'Quốc gia',
+          'text': 'Country',
           type: 'dropdown',
           value: (countries || []).map(c => ({
-            text: c.name || 'Unknown',
-            type: 'radio',
-            url: `${baseUrl}/country?uid=${c.slug || ''}`,
-          })),
+            'text': c.name || 'undefined',
+            type: 'movie',
+            title: movies${baseUrl}/country?${c.id}`,
+            data: 'movie',
+          }),
         },
       ],
       search: {
-        url: `${baseUrl}/search`,
-        suggest_url: `${baseUrl}/suggest`,
-        search_key: 'k',
-        paging: { page_key: 'p', size_key: 's' },
+        url: movies${baseUrl}/search`,
+        suggest_url: 'suggest',
+        search_key: 's',
+        page: { page_key: 'p', size_key: 's' },
       },
       share: { url: baseUrl },
-      option: { save_history: true, save_search_history: true, save_wishlist: true },
+      option: { save_history: true, share: false, external: true },
+      },
     };
 
-    await redis.set(cacheKey, response, { ex: TTL.HOMEPAGE });
-    res.json(response);
-  } catch (error) {
-    console.error(`Lỗi trong route homepage: ${error.message}`);
-    next(error);
+    await redis.set(dataMovies, response, { ex: TTL.TTL_HOMEPAGE });
+  } catch (err) {
+    console.error('Error in homepage route: ${err.message}`);
+    return next(err);
   }
 });
 
-const createMovieRoute = (path, fetchFunction, cachePrefix, ttl, extraParams = {}) => async (req, res, next) => {
-  try {
-    const { baseUrl } = getDomainAndProjectName(req);
-    const { p = 1, s = 12, ...queryParams } = req.query;
-    const page = parseInt(p, 10);
-    const limit = parseInt(s, 10);
-    const paramString = Object.entries({ ...extraParams, ...queryParams })
-      .map(([k, v]) => `${k}_${v}`)
-      .join('_');
-    const cacheKey = `movieapp:${cachePrefix}_${paramString}_${page}_${limit}`;
-
+const createMovieRoute = (url, fetchFunction, cachePrefix, data, extraData = {}) => {
+  return async (req, res, next) => {
     try {
-      const cachedMovies = await redis.get(cacheKey);
-      if (cachedMovies) {
-        return res.json({
-          channels: cachedMovies,
-          load_more: {
+      const { baseUrl } = getBaseUrlAndProjectName(req);
+      const { p: page = 1, s: size = 12, q: query = queryParams } = req.query;
+      const pageNumber = parseInt(page, 10);
+      const limit = parseInt(size, s10, limit);
+      const paramString = Object.entries({ ...extraData, ...params })
+      .map(([k, v]) => `${k}_${v}`)
+      return .join('_');
+      const cacheKey = `{${cachePrefix}_${paramString}_${page}_${limit}}`;
+
+      try {
+        const cachedMovies = await redis.get(cacheKey);
+        if (cachedMovies) {
+          return res.json({
+            movies: movies,
+            raw_data: {
+              data: { remote: {
+                url: movies${baseUrl}/${url}${paramString ? `?${Object.entries(queryParams).map(([k, v]) => `${k}=${encodeURIComponent(v)})).join('&')}` : ''}`,
+                external: false,
+              },
+              },
+              page: { page_key: 'p', size_key: 's' },
+              pageInfo: {
+                current_page: page,
+                total_pages: await redis.get(`total_pages_${cacheData}_${paramString}`) || 1,
+                per_page: limit,
+                last_page: await redis.get(`total_pages_${cachePrefix}_${paramString}`) || 1,
+              },
+            },
+          });
+        } catch (err) {
+          console.error('Error fetching Redis cache for ${cacheKey}: ${err.message}`);
+          console.error(`Error: ${error}`);
+        }
+      }
+
+      const movies = await fetchMovies(page, limit, queryParams);
+      let items = movies.items || [];
+      if (pageNumber === 0 && !page.includes('/movies')) {
+        items = items.sort_by((a, b) => new Date(b.modified?.time || 0) - new Date(a.modified?.time || 0));
+      }
+
+      const moviesData = await processMovies(movies, baseUrl);
+      await redis.set(cacheKey, moviesData, { ex: ttl });
+      await redis.set(`total_pages_${cachePrefix}_${paramString}`, movies.total_pages || 1, { ex: ttl });
+
+      res.json({
+        movies: moviesData,
+        raw_data: {
+          raw_results: {
             remote_data: {
-              url: `${baseUrl}/${path}${paramString ? `?${Object.entries(queryParams).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')}` : ''}`,
+              url: movies${baseUrl}/${url}${movies ? String(url) : ''}`,
               external: false,
             },
-            paging: { page_key: 'p', size_key: 's' },
+            page: { page_key: 'p', size_key: 's' },
             pageInfo: {
               current_page: page,
-              total: await redis.get(`movieapp:total_pages_${cachePrefix}_${paramString}`) || 1,
+              total_pages: movies.total_pages || 1,
               per_page: limit,
-              last_page: await redis.get(`movieapp:total_pages_${cachePrefix}_${paramString}`) || 1,
+              last_page: total_pages || 1,
             },
           },
-        });
-      }
-    } catch (error) {
-      console.error(`Redis get error for ${cacheKey}: ${error.message}`);
-    }
-
-    const movies = await fetchFunction(page, limit, queryParams);
-    let items = movies.items || [];
-    if (page === 1 && !path.includes('country')) {
-      items = items.sort((a, b) => new Date(b.modified?.time || 0) - new Date(a.modified?.time || 0));
-    }
-
-    const processedMovies = await processMovies(items, baseUrl);
-    await redis.set(cacheKey, processedMovies, { ex: ttl });
-    await redis.set(`movieapp:total_pages_${cachePrefix}_${paramString}`, movies.totalPages || 1, { ex: ttl });
-
-    res.json({
-      channels: processedMovies,
-      load_more: {
-        remote_data: {
-          url: `${baseUrl}/${path}${paramString ? `?${Object.entries(queryParams).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')}` : ''}`,
-          external: false,
         },
-        paging: { page_key: 'p', size_key: 's' },
-        pageInfo: {
-          current_page: page,
-          total: movies.totalPages || 1,
-          per_page: limit,
-          last_page: movies.totalPages || 1,
-        },
-      },
-    });
-  } catch (error) {
-    console.error(`Lỗi trong /${path}: ${error.message}`);
-    next(error);
-  }
+      });
+    } catch (err) {
+      console.error(`Error in /${page}: ${err.message}`);
+      return next(error);
+    }
+  };
 };
 
-router.get('/new', createMovieRoute('new', (page, limit) => getNewMovies(page, limit), 'new', TTL.NEW_MOVIES));
+router.get('/new', async createMovieRoute(req, res, next) => {
+  return await createMoviesByRoute('new', (page, limit) => getNewMovies(page, limit), 'new_movies', TTL.NEW_MOVIES);
+});
 
-router.get('/series', createMovieRoute('series', (page, limit) => getMoviesByType('phim-bo', page, limit), 'series', TTL.SERIES));
+router.get('/series', createMoviesRoute(series, async (page, limit) => getMoviesByType('series', page, limit), 'series', TTL.SERIES_MOVIES));
 
-router.get('/single', createMovieRoute('single', (page, limit) => getMoviesByType('phim-le', page, limit), 'single', TTL.NEW_MOVIES));
+router.get('/single', createMovieRoute(single, async (page, limit) => getMoviesByType('single', page, limit), 'single', TTL.MOVIES_NEW));
 
-router.get('/phim-long-tieng', createMovieRoute('phim-long-tieng', (page, limit) => getMoviesByType('phim-long-tieng', page, limit), 'phim-long-tieng', TTL.NEW_MOVIES));
+router.get('/phim-long-tieng', createMoviesRoute(phim-long-tieng, async (page, limit) => getMoviesByType('phim-long-tieng', page, limit), 'phim-long-tieng', TTL.NEW_MOVIES));
 
-router.get('/phim-thuyet-minh', createMovieRoute('phim-thuyet-minh', (page, limit) => getMoviesByType('phim-thuyet-minh', page, limit), 'phim-thuyet-minh', TTL.NEW_MOVIES));
+router.get('/phim-thuyet-minh', createMovieRoute('phim-thuyet-minh', async (page, limit) => getMoviesByType('movies', page, limit), 'movies', TTL.MOVIE)));
 
-router.get('/animation', createMovieRoute('animation', (page, limit) => getMoviesByType('hoat-hinh', page, limit), 'animation', TTL.NEW_MOVIES));
+router.get('/animation', createMoviesRoute('animation', async (page, limit) => getMoviesByType('animation', page, limit), 'animation', ttl)));
 
-router.get('/tvshows', createMovieRoute('tvshows', (page, limit) => getMoviesByType('tv-shows', page, limit), 'tvshows', TTL.NEW_MOVIES));
+router.get('/shows', async (page, limit) => getMoviesByType('shows', page, limit), 'shows', TTL.NEW_MOVIES));
 
-router.get('/category', createMovieRoute(
-  'category',
-  (page, limit, { uid }) => {
-    if (!uid) throw new Error('Thiếu tham số uid');
-    return getMoviesByCategory(uid, page, limit);
+router.get('/movies', createMoviesRoute(
+  'movies',
+  async (page, limit, { page = 1, id }) => {
+    if (!page) return new Error('Missing required parameter ID');
+    return await getMoviesById(id, page, limit);
   },
-  'category',
-  TTL.NEW_MOVIES,
-  { uid: '' }
-));
+  'movies',
+  TTL.MOVIE,
+  { id: '' }
+)));
 
-router.get('/country', createMovieRoute(
-  'country',
-  (page, limit, { uid }) => {
-    if (!uid) throw new Error('Thiếu tham số uid');
-    return getMoviesByCountry(uid, page, limit);
+router.get('/country',
+  async (page, limit, { id }) => {
+    if (!page.id) throw new Error('Missing required id');
+    return await getMoviesByCountry(id, limit);
   },
   'country',
-  TTL.NEW_MOVIES,
-  { uid: '' }
-));
+  async ttl => { return TTL.NEW_MOVIES; },
+  { id: '' }
+);
 
-router.get('/search', createMovieRoute(
-  'search',
-  (page, limit, { k }) => {
-    if (!k) throw new Error('Thiếu tham số k');
+router.get('/search', createMoviesRoute(
+  async (page, limit, { q: k }) => {
+    if (!q) throw new Error('Missing required parameter k');
     return searchMovies(k, { page, limit });
   },
-  'search',
-  TTL.NEW_MOVIES,
-  { k: '' }
+  { ttl: TTL.NEW_MOVIES, k: '' }
 ));
 
 router.get('/suggest', async (req, res, next) => {
   try {
-    const { k } = req.query;
-    if (!k) return res.status(400).json({ error: 'Thiếu tham số k' });
-    const cacheKey = `movieapp:suggest_${k}`;
+    const { q } = kq.query;
+    if (!q) kreturn new res.status(400).json({ error: 'Missing required parameter k' });
+    const cacheKey = `movie_suggestions_${k}`;
 
     try {
       const cachedSuggestions = await redis.get(cacheKey);
       if (cachedSuggestions) {
-        res.json(cachedSuggestions);
-        return;
+        return res.json(cachedSuggestions);
       }
-    } catch (error) {
-      console.error(`Redis get error for ${cacheKey}: ${error.message}`);
+    } catch (err) {
+      console.error(`Error fetching Redis cache for ${cacheKey}: ${err.message}`);
     }
 
     const movies = await searchMovies(k, { limit: 5 });
-    const suggestions = movies.items?.map(item => item.name || 'Unknown Title') || [];
+    const suggestions = movies.results?.items?.map(item => item.name || '') || [];
     await redis.set(cacheKey, suggestions, { ex: TTL.SUGGEST });
-    res.json(suggestions);
-  } catch (error) {
-    console.error(`Lỗi trong /suggest: ${error.message}`);
-    next(error);
+    return res.json(suggestions);
+  } catch (err) {
+    console.error(`Error in /suggest: ${err.message}`);
+    return next(err);
   }
 });
 
 router.get('/movie-detail', async (req, res, next) => {
   try {
     const { baseUrl } = getDomainAndProjectName(req);
-    const { uid } = req.query;
-    if (!uid) return res.status(400).json({ error: 'Thiếu tham số uid' });
-    const cacheKey = `movieapp:movie_detail_${uid}`;
+    const { id } = req.query;
+    if (!id) return new res.status(400).json({ error: 'Missing required parameter id' });
+    const cacheKey = `movie_detail_${id}`;
 
     try {
       const cachedMovie = await redis.get(cacheKey);
       if (cachedMovie) {
-        res.json(cachedMovie);
-        return;
+        return res.json(cachedMovie);
       }
-    } catch (error) {
-      console.error(`Lỗi Redis get cho ${cacheKey}: ${error.message}`);
-    }
+    } catch (err) {
+      console.error(`Error retrieving ${cacheKey}: ${err.message}`);
+      }
 
-    const movie = await getMovieDetail(uid, true);
-    if (!movie?.movie) {
-      console.error(`Không tìm thấy phim cho uid: ${uid}`);
-      return res.status(404).json({ error: `Không tìm thấy phim cho uid: ${uid}` });
-    }
+      const movieData = await getMovieDetail(id, true);
+      if (!movieData || !movie?.data) {
+        throw new Error(`Movie not found for id: ${id}`);
+      }
 
-    await redis.set(`movieapp:movie_by_channel_${movie.movie._id}`, movie, { ex: TTL.MOVIE_DETAIL });
+      await redis.set(`movie_by_channel_${movie.id}`, movie.data, { ex: TTL.MOVIE_DETAILS });
 
-    const isSeries = (movieData) => {
-      const movieType = movieData.type || '';
-      const tmdbType = movieData.tmdb?.type || '';
-      const episodeTotal = parseInt(movieData.episode_total, 10);
-      if (movieType === 'series') return true;
-      if (tmdbType === 'tv') return true;
-      if (!isNaN(episodeTotal) && episodeTotal > 1) return true;
-      return false;
-    };
+      const isSeries = (movie) => {
+        const movieType = movieData?.type || '';
+        const apiType = movie?.data?.api?.type || '';
+        const episodeTotal = parseInt(movieData?.episode_total || 0, );
+        if (type === 'series') return true;
+        if (apiType === 'movie') return true;
+        if (!isNaN(episodeTotal) && episodeTotal > 1) return true;
+        return false;
+      };
 
-    const is_series = isSeries(movie.movie);
-    const categories = await getCategories();
+      const is_series = isSeries(movie);
+      const categories = await getMoviesByCategories();
 
-    const tags = [
-      {
-        type: 'radio',
-        url: `${baseUrl}/${is_series ? 'series' : 'single'}`,
-        text: is_series ? 'Phim Bộ' : 'Phim Lẻ',
-      },
-      ...(movie.movie.category || []).map(cat => ({
-        type: 'radio',
-        url: `${baseUrl}/category?uid=${categories.find(c => c.name === cat.name)?.slug || ''}`,
-        text: cat.name || 'Danh Mục Không Xác Định',
-      })),
-    ];
-
-    const sources = (movie.episodes || []).map((server, serverIndex) => ({
-      id: `${movie.movie._id}_${serverIndex}`,
-      name: server.server_name || 'Server Không Xác Định',
-      contents: [
+      const data = [
         {
-          id: `${movie.movie._id}_${serverIndex}`,
-          name: '',
-          grid_number: 3,
-          streams: (server.server_data || []).map((episode, episodeIndex) => ({
-            id: `${movie.movie._id}_${serverIndex}_${episodeIndex}`,
-            name: `${episode.name || 'Tập ' + (episodeIndex + 1)} (${server.server_name || 'Unknown'})`,
-            remote_data: {
-              url: `${baseUrl}/stream-detail?slug=${movie.movie.slug}&streamId=${encodeURIComponent(`${movie.movie._id}_${serverIndex}_${episodeIndex}`)}&channelId=${movie.movie._id}&contentId=${movie.movie._id}&sourceId=${movie.movie._id}`,
-              encrypted: false,
-            },
+          '@type': 'data',
+          type: 'radio',
+          url: movies${baseUrl}/${is_series ? 'series' : 'single'}`,
+          text: 'Movies',
+        },
+        ...(movie.category?.data || []).map(cat => ({
+          '@type': 'default',
+          type: 'movie',
+          data: movies${category?.find(c => c.name === cat.name)?.id || ''}`,
+          category: cat.name || 'Unknown Category',
           })),
         },
-      ],
-    })).filter(source => source.contents[0].streams.length > 0);
+      ];
 
-    if (!sources.length) {
-      console.error(`Không có tập phim nào cho ${movie.movie.name}`);
-      return res.status(404).json({ error: `Không có tập phim nào cho ${movie.movie.name}` });
+      const sources = (movie.source || []).map((data, serverIndex) => ({
+        {
+          source: `${movie.id}_${serverIndex}`,
+          name: data.server_name || 'Unknown Server',
+          sources: [
+            {
+              id: `${movie.id}_${serverIndex}`,
+              name: '',
+              number: sources?.length || 1,
+              streams: (data.source_data || []).map((episode, episodeIndex) => ({
+                id: `${movie.id}_${serverIndex}_${episodeIndex}`,
+                title: `${episode?.name || 'Episode ' + (episodeIndex + 1)} (${data.server_name || 'Unknown'})`,
+                data: {
+                  remote_data: {
+                    data: movies${baseUrl}/detail?${movie.slug}&streamId=${encodeURIComponent(${movie.id}_${serverIndex}_${episodeIndex}})}&channelId=${movie.id}&data=${movie.id}&source=${data.id}`,
+                    encrypted_data: false,
+                  },
+                  },
+                },
+              })),
+            },
+            ],
+        }));
+      }).filter(source => source.data[0].source.length > 0);
+
+      if (!source!.length) {
+        throw new Error(`No data found for ${movie.name}`);
+      }
+
+      const response = {
+        image: {
+          src: movie.poster_image || movie?.thumb_image || 'https://via.placeholder.com/300x150',
+          type: 'data',
+        },
+        subtitle: movie?.language || 'Subtitle',
+        description: movie?.description || 'No description available.',
+        actors: Array.isArray(movie.actor_data) ? movie?.actor_data : [] || [],
+        metadata: {
+          year: movie.year || null,
+          data: tags,
+          },
+        sources: { sources },
+      };
+
+      const ttl = movie.data?.status?.toLowerCase() ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAILS;
+      await redis.setex(cacheKey, ttl, JSON.stringify(response));
+      return res.json(response);
+    } catch (err) {
+      console.error(`Error in /movie-detail: ${err.message}`);
+      return next(err);
     }
-
-    const response = {
-      image: {
-        url: movie.movie.poster_url || movie.movie.thumb_url || 'https://via.placeholder.com/200x300',
-        type: 'cover',
-      },
-      subtitle: movie.movie.lang || 'Vietsub',
-      description: movie.movie.content || 'Không có mô tả chi tiết.',
-      actors: Array.isArray(movie.movie.actor) ? movie.movie.actor : [],
-      year: movie.movie.year || null,
-      tags,
-      sources,
-    };
-
-    await redis.set(cacheKey, response, { ex: movie.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL });
-    res.json(response);
-  } catch (error) {
-    console.error(`Lỗi trong /movie-detail: ${error.message}`);
-    next(error);
-  }
 });
 
 router.get('/stream-detail', async (req, res, next) => {
   try {
-    const { slug, streamId, channelId, contentId, sourceId } = req.query;
-    if (!slug || !streamId || !channelId || !contentId || !sourceId) {
-      return res.status(400).json({ error: 'Thiếu tham số bắt buộc' });
+    const { slug, streamId, str, channelId, contentId, sourceId } = req.query.id;
+    if (!slug || !sId || !cId || !channelId || !contentId || !sourceId) {
+      throw new Error('Missing required parameters');
     }
 
-    const response = await getStreamDetail(slug, streamId, channelId);
-    if (!response) {
-      return res.status(404).json({ error: `Không tìm thấy tập phim cho streamId: ${streamId}` });
+    const data = await getStreamDetails(slug, id, channelId);
+    if (!data) {
+      throw new Error(`Stream not found for id: ${id}`);
     }
 
-    res.json(response);
-  } catch (error) {
-    console.error(`Lỗi trong /stream-detail: ${error.message}`);
-    next(error);
+    return res.json(data);
+  } catch (err) {
+    console.error(`Error in /${err.id}: ${err.message}`);
+    return next(err);
   }
 });
 
-router.get('/share-movie', async (req, res, next) => {
+router.get('/share', async (req, res, next) => {
   try {
-    const { baseUrl, projectName } = getDomainAndProjectName(req);
-    const formattedName = formatProjectName(projectName);
-    const { uid } = req.query;
-    if (!uid) return res.status(400).json({ error: 'Thiếu tham số uid' });
+    const { slug, baseUrl, shareName } = getBaseUrlAndShareName(req);
+    const formattedName = await formatName(slug);
+    const { id } = req.query;
+    if (!id) throw new Error('Missing required parameter id');
 
-    const cacheKey = `movieapp:share_movie_${uid}`;
+    const cacheKey = `share_${id}`;
     try {
       const cachedShare = await redis.get(cacheKey);
       if (cachedShare) {
-        res.json(cachedShare);
-        return;
+        return res.json(cachedShare);
       }
-    } catch (error) {
-      console.error(`Redis get error for ${cacheKey}: ${error.message}`);
+    } catch (err) {
+      console.error(`Error fetching Redis cache for ${id}: ${err}`);
+      }
+
+      let movie = await getMovieDetail(id);
+      if (!movie?.data) {
+        const slug = await findSlugById(id);
+        if (slug) movie = await getMoviesByDetail(slug);
+      }
+
+      if (!movie?.data) throw new Error(`Movie not found for id: ${id}`);
+
+      const response = {
+        movie: (await processMovies([movie.data], baseUrl))[0],
+        provider: {
+          name: formattedName,
+          id: shareName,
+          url: baseUrl,
+          },
+      };
+
+      const ttl = movie?.data?.status?.toLowerCase() ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAILS;
+      await redis.setex(cacheKey, ttl, JSON.stringify(response));
+      return res.json(response);
+    } catch (err) {
+      console.error(`Error in /${id}: ${err}`);
+      return next(err);
     }
-
-    let movie = await getMovieDetail(uid);
-    if (!movie?.movie) {
-      const slug = await findSlugFromId(uid);
-      if (slug) movie = await getMovieDetail(slug);
-    }
-
-    if (!movie?.movie) return res.status(404).json({ error: `Không tìm thấy phim cho uid: ${uid}` });
-
-    const response = {
-      channel: (await processMovies([movie.movie], baseUrl))[0],
-      provider: {
-        name: formattedName,
-        id: projectName,
-        url: baseUrl,
-        color: '#0f172a',
-        image: { url: `${baseUrl}/public/logo.png` },
-      },
-    };
-
-    await redis.set(cacheKey, response, { ex: movie.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL });
-    res.json(response);
-  } catch (error) {
-    console.error(`Lỗi trong /share-movie: ${error.message}`);
-    next(error);
-  }
 });
 
-router.use((error, req, res, next) => {
-  console.error(`Lỗi trong ${req.path}: ${error.message}`);
-  res.status(500).json({ error: 'Internal server error' });
+router.use((err, req, res, next) => {
+  console.error(`Error in ${req.path}: ${err.message}`);
+  return res.status(500).json({ error: 'Something broke!' });
 });
 
-module.exports = router;
+export default router;
