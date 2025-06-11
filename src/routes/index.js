@@ -1,3 +1,4 @@
+src/routes/index.js
 const express = require('express');
 const router = express.Router();
 const {
@@ -27,18 +28,18 @@ const getDomainAndProjectName = (req) => {
 }
 
 async function processMovies(movies, baseUrl) {
-  if (!movies || !Array(movies)) return [];
+  if (!movies || !Array.isArray(movies)) return [];
 
-  const slugs = movies.map(movie => movie.slugs);
-  const movieDetails = await getMoviesBySlugs(slugs);
+  const slugs = movies.map(movie => movie.slug);
+  const movieDetails = await getMultipleMovieDetails(slugs);
 
   const isSeriesMovies = (movie, detail) => {
     const movieType = detail.movieDetails?.data || movie.type || '';
     const apiType = detail.movie?.api?.type || movie.api?.data;
     const episodeTotal = parseInt(detail.movieDetails?.data?.episode_total || movie.total_episode, 10);
 
-    if (movieData?.type === 'movie') return true;
-    if (apiType === 'movie') return true;
+    if (movieType === 'movie') return false;
+    if (apiType === 'movie') return false;
     if (!isNaN(episodeTotal) && episodeTotal > 1) return true;
     return false;
   };
@@ -51,19 +52,20 @@ async function processMovies(movies, baseUrl) {
     const image_url = detail.movie?.poster_image || movie?.poster_image || movie?.thumb || 'https://via.placeholder.com/300x300';
 
     const data = [
-      { '@type': 'Movie',
-      type: 'radio',
-      text: is_series ? 'Series' : 'Movie',
-      dataKey: `${baseUrl}/${is_series ? 'movie_series' : 'movie_single'}`,
-      data: { ...data, ...extraData }
+      { 
+        '@type': 'Movie',
+        type: 'radio',
+        text: is_series ? 'Series' : 'Movie',
+        dataKey: `${baseUrl}/${is_series ? 'movie_series' : 'movie_single'}`,
+        data: { ...detail, ...movie }
       },
-    ...(detail.movieDetails?.category || movie.category || []).map(cat => ({
-      '@type': 'default',
-      type: 'movie',
-      text: cat.name || 'Unknown Category',
-      dataKey: `${baseUrl}/category?${cat.id}`,
-      data: { ...extraData }
-    })),
+      ...(detail.movieDetails?.category || movie.category || []).map(cat => ({
+        '@type': 'default',
+        type: 'movie',
+        text: cat.name || 'Unknown Category',
+        dataKey: `${baseUrl}/category?${cat.id}`,
+        data: { ...movie }
+      })),
     ];
 
     return {
@@ -129,9 +131,8 @@ async function updateCachedMovies(cacheKey, newMovies, limit, ttl) {
 
 router.get('/', async (req, res, next) => {
   try {
-    const { baseUrl, projectName } = getDomainAndProjectName(req);
-    const formattedName = formatProjectName(projectName);
-    const cacheKey = `movieapp:homepage_${projectName}`;
+    const { baseUrl, direction } = getDomainAndProjectName(req);
+    const cacheKey = `movieapp:homepage_${baseUrl}`;
 
     try {
       const cached = await redis.get(cacheKey);
@@ -157,68 +158,53 @@ router.get('/', async (req, res, next) => {
     ];
 
     const [categories, countries, ...rawData] = await Promise.all([
-      getCategoriesMovies(),
-      getCountriesByType(),
+      getCategories(),
+      getCountries(),
       ...fetchConfig.map(cfg => cfg.fn()),
     ]);
 
     const processedGroups = await Promise.all(
       fetchConfig.map(async (cfg, idx) => {
         const raw = rawData[idx]?.results || [];
-        const totalPages = rawData.total_pages || 10;
-        const cacheSubKey = cacheKey${movies}_${rawData[idx]}`;
-        const movies = await updateMoviesByCachedMovies(cacheSubKey, raw, 8, cfg.tl);
-        const movies = await processMovies(movies, baseUrl);
+        const totalPages = rawData[idx]?.total_pages || 10;
+        const cacheSubKey = `${cacheKey}_${cfg.key}`;
+        const movies = await updateCachedMovies(cacheSubKey, raw, 8, cfg.ttl);
+        const processedMovies = await processMovies(movies, baseUrl);
         return {
-          raw_results: raw.results,
-          name: movies,
-          id: cfg.id.replace(/-/g-, '_'),
+          name: cfg.name,
+          id: cfg.key.replace(/-/g, '_'),
           display: cfg.display || 'horizontal',
-          movies: 1,
-          data: { url: movies${baseUrl}${movies.url}` },
-          movies,
-          raw_data: movies,
-          data: {
-            remote: {
-              remote_data: { url: movies${baseUrl}${movies}`, external: true },
-            },
-            page: { page_key: 'p', size_key: 's'},
-            pageInfo: {
-              current_page: 1,
-              total_pages: totalPages,
-              per_page: 8,
-              last_page: totalPages,
-            },
+          data: { url: `${baseUrl}${cfg.url}` },
+          movies: processedMovies,
+          raw_data: raw,
+          pageInfo: {
+            current_page: 1,
+            total_pages: totalPages,
+            per_page: 8,
+            last_page: totalPages,
           },
-        },
+        };
       })
     );
 
     const response = {
-      raw_results: raw_data,
       id: 'movies',
-      movies: moviesName,
       title: baseUrl,
       color: '#000000',
       description: 'Movies Movies - Entertainment at its peak, delivering vivid and complete experiences anytime, anywhere.',
-      data: { url: movies${baseUrl}/public/logo.png` },
-      data_number: 2,
-      groups: movies,
+      data: { url: `${baseUrl}/public/logo.png` },
+      groups: processedGroups,
       sorts: [
-        { 'text': 'Newest', type: 'movie', url: movies${baseUrl}/new' },
+        { 'text': 'Newest', type: 'movie', url: `${baseUrl}/new` },
         {
           'text': 'Categories',
           type: 'dropdown',
           value: (categories || [])?.map(cat => ({
-            return {
-              text: cat.name || 'undefined',
-              title: 'movie',
-              type: 'radio',
-              url: movies${baseUrl}/category?${cat.id}`,
-              data: 'movie',
-            },
-            }),
-          }),
+            text: cat.name || 'undefined',
+            type: 'radio',
+            url: `${baseUrl}/category?${cat.id}`,
+            data: 'movie',
+          })),
         },
         {
           'text': 'Country',
@@ -226,152 +212,150 @@ router.get('/', async (req, res, next) => {
           value: (countries || []).map(c => ({
             'text': c.name || 'undefined',
             type: 'movie',
-            title: movies${baseUrl}/country?${c.id}`,
+            url: `${baseUrl}/country?${c.id}`,
             data: 'movie',
-          }),
+          })),
         },
       ],
       search: {
-        url: movies${baseUrl}/search`,
+        url: `${baseUrl}/search`,
         suggest_url: 'suggest',
         search_key: 's',
         page: { page_key: 'p', size_key: 's' },
       },
       share: { url: baseUrl },
       option: { save_history: true, share: false, external: true },
-      },
     };
 
-    await redis.set(dataMovies, response, { ex: TTL.TTL_HOMEPAGE });
+    await redis.set(cacheKey, response, { ex: TTL.HOMEPAGE });
+    res.json(response);
   } catch (err) {
-    console.error('Error in homepage route: ${err.message}`);
+    console.error(`Error in homepage route: ${err.message}`);
     return next(err);
   }
 });
 
-const createMovieRoute = (url, fetchFunction, cachePrefix, data, extraData = {}) => {
+const createMovieRoute = (url, fetchFunction, cachePrefix, ttl, extraData = {}) => {
   return async (req, res, next) => {
     try {
-      const { baseUrl } = getBaseUrlAndProjectName(req);
-      const { p: page = 1, s: size = 12, q: query = queryParams } = req.query;
+      const { baseUrl } = getDomainAndProjectName(req);
+      const { p: page = 1, s: size = 12, ...queryParams } = req.query;
       const pageNumber = parseInt(page, 10);
-      const limit = parseInt(size, s10, limit);
-      const paramString = Object.entries({ ...extraData, ...params })
-      .map(([k, v]) => `${k}_${v}`)
-      return .join('_');
-      const cacheKey = `{${cachePrefix}_${paramString}_${page}_${limit}}`;
+      const limit = parseInt(size, 10);
+      const paramString = Object.entries({ ...extraData, ...queryParams })
+        .map(([k, v]) => `${k}_${v}`)
+        .join('_');
+      const cacheKey = `${cachePrefix}_${paramString}_${page}_${limit}`;
 
       try {
         const cachedMovies = await redis.get(cacheKey);
         if (cachedMovies) {
           return res.json({
-            movies: movies,
+            movies: cachedMovies,
             raw_data: {
-              data: { remote: {
-                url: movies${baseUrl}/${url}${paramString ? `?${Object.entries(queryParams).map(([k, v]) => `${k}=${encodeURIComponent(v)})).join('&')}` : ''}`,
+              remote: {
+                url: `${baseUrl}/${url}${paramString ? `?${Object.entries(queryParams).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')}` : ''}`,
                 external: false,
-              },
               },
               page: { page_key: 'p', size_key: 's' },
               pageInfo: {
-                current_page: page,
-                total_pages: await redis.get(`total_pages_${cacheData}_${paramString}`) || 1,
+                current_page: pageNumber,
+                total_pages: await redis.get(`total_pages_${cachePrefix}_${paramString}`) || 1,
                 per_page: limit,
                 last_page: await redis.get(`total_pages_${cachePrefix}_${paramString}`) || 1,
               },
             },
           });
-        } catch (err) {
-          console.error('Error fetching Redis cache for ${cacheKey}: ${err.message}`);
-          console.error(`Error: ${error}`);
         }
+      } catch (err) {
+        console.error(`Error fetching Redis cache for ${cacheKey}: ${err.message}`);
       }
 
-      const movies = await fetchMovies(page, limit, queryParams);
-      let items = movies.items || [];
-      if (pageNumber === 0 && !page.includes('/movies')) {
-        items = items.sort_by((a, b) => new Date(b.modified?.time || 0) - new Date(a.modified?.time || 0));
+      const movies = await fetchFunction(pageNumber, limit, queryParams);
+      let items = movies.results || [];
+      if (pageNumber === 1 && !url.includes('/movies')) {
+        items = items.sort((a, b) => new Date(b.modified?.time || 0) - new Date(a.modified?.time || 0));
       }
 
-      const moviesData = await processMovies(movies, baseUrl);
+      const moviesData = await processMovies(items, baseUrl);
       await redis.set(cacheKey, moviesData, { ex: ttl });
       await redis.set(`total_pages_${cachePrefix}_${paramString}`, movies.total_pages || 1, { ex: ttl });
 
       res.json({
         movies: moviesData,
         raw_data: {
-          raw_results: {
-            remote_data: {
-              url: movies${baseUrl}/${url}${movies ? String(url) : ''}`,
-              external: false,
-            },
-            page: { page_key: 'p', size_key: 's' },
-            pageInfo: {
-              current_page: page,
-              total_pages: movies.total_pages || 1,
-              per_page: limit,
-              last_page: total_pages || 1,
-            },
+          remote: {
+            url: `${baseUrl}/${url}${movies ? String(url) : ''}`,
+            external: false,
+          },
+          page: { page_key: 'p', size_key: 's' },
+          pageInfo: {
+            current_page: pageNumber,
+            total_pages: movies.total_pages || 1,
+            per_page: limit,
+            last_page: movies.total_pages || 1,
           },
         },
       });
     } catch (err) {
-      console.error(`Error in /${page}: ${err.message}`);
-      return next(error);
+      console.error(`Error in /${url}: ${err.message}`);
+      return next(err);
     }
   };
 };
 
-router.get('/new', async createMovieRoute(req, res, next) => {
-  return await createMoviesByRoute('new', (page, limit) => getNewMovies(page, limit), 'new_movies', TTL.NEW_MOVIES);
-});
+router.get('/new', createMovieRoute('new', (page, limit) => getNewMovies(page, limit), 'new_movies', TTL.NEW_MOVIES));
 
-router.get('/series', createMoviesRoute(series, async (page, limit) => getMoviesByType('series', page, limit), 'series', TTL.SERIES_MOVIES));
+router.get('/series', createMovieRoute('series', (page, limit) => getMoviesByType('series', page, limit), 'series', TTL.SERIES_MOVIES));
 
-router.get('/single', createMovieRoute(single, async (page, limit) => getMoviesByType('single', page, limit), 'single', TTL.MOVIES_NEW));
+router.get('/single', createMovieRoute('single', (page, limit) => getMoviesByType('single', page, limit), 'single', TTL.MOVIES));
 
-router.get('/phim-long-tieng', createMoviesRoute(phim-long-tieng, async (page, limit) => getMoviesByType('phim-long-tieng', page, limit), 'phim-long-tieng', TTL.NEW_MOVIES));
+router.get('/phim-long-tieng', createMovieRoute('phim-long-tieng', (page, limit) => getMoviesByType('phim-long-tieng', page, limit), 'phim-long-tieng', TTL.NEW_MOVIES));
 
-router.get('/phim-thuyet-minh', createMovieRoute('phim-thuyet-minh', async (page, limit) => getMoviesByType('movies', page, limit), 'movies', TTL.MOVIE)));
+router.get('/phim-thuyet-minh', createMovieRoute('phim-thuyet-minh', (page, limit) => getMoviesByType('phim-thuyet-minh', page, limit), 'phim-thuyet-minh', TTL.MOVIES));
 
-router.get('/animation', createMoviesRoute('animation', async (page, limit) => getMoviesByType('animation', page, limit), 'animation', ttl)));
+router.get('/animation', createMovieRoute('animation', (page, limit) => getMoviesByType('animation', page, limit), 'animation', TTL.NEW_MOVIES));
 
-router.get('/shows', async (page, limit) => getMoviesByType('shows', page, limit), 'shows', TTL.NEW_MOVIES));
+router.get('/shows', createMovieRoute('shows', (page, limit) => getMoviesByType('shows', page, limit), 'shows', TTL.NEW_MOVIES));
 
-router.get('/movies', createMoviesRoute(
+router.get('/movies', createMovieRoute(
   'movies',
-  async (page, limit, { page = 1, id }) => {
-    if (!page) return new Error('Missing required parameter ID');
-    return await getMoviesById(id, page, limit);
+  async (page, limit, { id }) => {
+    if (!id) throw new Error('Missing required parameter ID');
+    return await getMoviesByCategory(id, page, limit);
   },
   'movies',
   TTL.MOVIE,
   { id: '' }
-)));
+));
 
-router.get('/country',
+router.get('/country', createMovieRoute(
+  'country',
   async (page, limit, { id }) => {
-    if (!page.id) throw new Error('Missing required id');
-    return await getMoviesByCountry(id, limit);
+    if (!id) throw new Error('Missing required id');
+    return await getMoviesByCountry(id, page, limit);
   },
   'country',
-  async ttl => { return TTL.NEW_MOVIES; },
+  TTL.NEW_MOVIES,
   { id: '' }
-);
+));
 
-router.get('/search', createMoviesRoute(
-  async (page, limit, { q: k }) => {
-    if (!q) throw new Error('Missing required parameter k');
-    return searchMovies(k, { page, limit });
+router.get('/search', createMovieRoute(
+  'search',
+  async (page, limit, { q }) => {
+    if (!q) throw new Error('Missing required parameter q');
+    return searchMovies(q, { page, limit });
   },
-  { ttl: TTL.NEW_MOVIES, k: '' }
+  'search',
+  TTL.NEW_MOVIES,
+  { q: '' }
 ));
 
 router.get('/suggest', async (req, res, next) => {
   try {
-    const { q } = kq.query;
-    if (!q) kreturn new res.status(400).json({ error: 'Missing required parameter k' });
-    const cacheKey = `movie_suggestions_${k}`;
+    const { q } = req.query;
+    if (!q) return res.status(400).json({ error: 'Missing required parameter q' });
+    const cacheKey = `movie_suggestions_${q}`;
 
     try {
       const cachedSuggestions = await redis.get(cacheKey);
@@ -382,8 +366,8 @@ router.get('/suggest', async (req, res, next) => {
       console.error(`Error fetching Redis cache for ${cacheKey}: ${err.message}`);
     }
 
-    const movies = await searchMovies(k, { limit: 5 });
-    const suggestions = movies.results?.items?.map(item => item.name || '') || [];
+    const movies = await searchMovies(q, { limit: 5 });
+    const suggestions = movies.results?.map(item => item.name || '') || [];
     await redis.set(cacheKey, suggestions, { ex: TTL.SUGGEST });
     return res.json(suggestions);
   } catch (err) {
@@ -396,7 +380,7 @@ router.get('/movie-detail', async (req, res, next) => {
   try {
     const { baseUrl } = getDomainAndProjectName(req);
     const { id } = req.query;
-    if (!id) return new res.status(400).json({ error: 'Missing required parameter id' });
+    if (!id) return res.status(400).json({ error: 'Missing required parameter id' });
     const cacheKey = `movie_detail_${id}`;
 
     try {
@@ -406,120 +390,115 @@ router.get('/movie-detail', async (req, res, next) => {
       }
     } catch (err) {
       console.error(`Error retrieving ${cacheKey}: ${err.message}`);
-      }
+    }
 
-      const movieData = await getMovieDetail(id, true);
-      if (!movieData || !movie?.data) {
-        throw new Error(`Movie not found for id: ${id}`);
-      }
+    const movieData = await getMovieDetail(id, true);
+    if (!movieData || !movieData.data) {
+      throw new Error(`Movie not found for id: ${id}`);
+    }
 
-      await redis.set(`movie_by_channel_${movie.id}`, movie.data, { ex: TTL.MOVIE_DETAILS });
+    await redis.set(`movie_by_channel_${movieData.id}`, movieData.data, { ex: TTL.MOVIE_DETAILS });
 
-      const isSeries = (movie) => {
-        const movieType = movieData?.type || '';
-        const apiType = movie?.data?.api?.type || '';
-        const episodeTotal = parseInt(movieData?.episode_total || 0, );
-        if (type === 'series') return true;
-        if (apiType === 'movie') return true;
-        if (!isNaN(episodeTotal) && episodeTotal > 1) return true;
-        return false;
-      };
+    const isSeries = (movie) => {
+      const movieType = movie?.type || '';
+      const apiType = movie?.api?.type || '';
+      const episodeTotal = parseInt(movie?.episode_total || 0, 10);
+      if (movieType === 'series') return true;
+      if (apiType === 'series') return true;
+      if (!isNaN(episodeTotal) && episodeTotal > 1) return true;
+      return false;
+    };
 
-      const is_series = isSeries(movie);
-      const categories = await getMoviesByCategories();
+    const is_series = isSeries(movieData);
+    const categories = await getCategories();
 
-      const data = [
+    const data = [
+      {
+        '@type': 'data',
+        type: 'radio',
+        url: `${baseUrl}/${is_series ? 'series' : 'single'}`,
+        text: 'Movies',
+      },
+      ...(movieData.category || []).map(cat => ({
+        '@type': 'default',
+        type: 'movie',
+        url: `${baseUrl}/category?${cat.id}`,
+        text: cat.name || 'Unknown Category',
+      })),
+    ];
+
+    const sources = (movieData.sources || []).map((source, serverIndex) => ({
+      source: `${movieData.id}_${serverIndex}`,
+      name: source.server_name || 'Unknown Server',
+      sources: [
         {
-          '@type': 'data',
-          type: 'radio',
-          url: movies${baseUrl}/${is_series ? 'series' : 'single'}`,
-          text: 'Movies',
-        },
-        ...(movie.category?.data || []).map(cat => ({
-          '@type': 'default',
-          type: 'movie',
-          data: movies${category?.find(c => c.name === cat.name)?.id || ''}`,
-          category: cat.name || 'Unknown Category',
+          id: `${movieData.id}_${serverIndex}`,
+          name: '',
+          number: source.sources?.length || 1,
+          streams: (source.source_data || []).map((episode, episodeIndex) => ({
+            id: `${movieData.id}_${serverIndex}_${episodeIndex}`,
+            title: `${episode?.name || 'Episode ' + (episodeIndex + 1)} (${source.server_name || 'Unknown'})`,
+            data: {
+              remote_data: {
+                url: `${baseUrl}/detail?${movieData.slug}&streamId=${encodeURIComponent(`${movieData.id}_${serverIndex}_${episodeIndex}`)}&channelId=${movieData.id}&data=${movieData.id}&source=${source.id}`,
+                encrypted_data: false,
+              },
+            },
           })),
         },
-      ];
+      ],
+    })).filter(source => source.sources[0].streams.length > 0);
 
-      const sources = (movie.source || []).map((data, serverIndex) => ({
-        {
-          source: `${movie.id}_${serverIndex}`,
-          name: data.server_name || 'Unknown Server',
-          sources: [
-            {
-              id: `${movie.id}_${serverIndex}`,
-              name: '',
-              number: sources?.length || 1,
-              streams: (data.source_data || []).map((episode, episodeIndex) => ({
-                id: `${movie.id}_${serverIndex}_${episodeIndex}`,
-                title: `${episode?.name || 'Episode ' + (episodeIndex + 1)} (${data.server_name || 'Unknown'})`,
-                data: {
-                  remote_data: {
-                    data: movies${baseUrl}/detail?${movie.slug}&streamId=${encodeURIComponent(${movie.id}_${serverIndex}_${episodeIndex}})}&channelId=${movie.id}&data=${movie.id}&source=${data.id}`,
-                    encrypted_data: false,
-                  },
-                  },
-                },
-              })),
-            },
-            ],
-        }));
-      }).filter(source => source.data[0].source.length > 0);
-
-      if (!source!.length) {
-        throw new Error(`No data found for ${movie.name}`);
-      }
-
-      const response = {
-        image: {
-          src: movie.poster_image || movie?.thumb_image || 'https://via.placeholder.com/300x150',
-          type: 'data',
-        },
-        subtitle: movie?.language || 'Subtitle',
-        description: movie?.description || 'No description available.',
-        actors: Array.isArray(movie.actor_data) ? movie?.actor_data : [] || [],
-        metadata: {
-          year: movie.year || null,
-          data: tags,
-          },
-        sources: { sources },
-      };
-
-      const ttl = movie.data?.status?.toLowerCase() ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAILS;
-      await redis.setex(cacheKey, ttl, JSON.stringify(response));
-      return res.json(response);
-    } catch (err) {
-      console.error(`Error in /movie-detail: ${err.message}`);
-      return next(err);
+    if (!sources.length) {
+      throw new Error(`No sources found for ${movieData.name}`);
     }
+
+    const response = {
+      image: {
+        src: movieData.poster_image || movieData.thumb_image || 'https://via.placeholder.com/300x150',
+        type: 'data',
+      },
+      subtitle: movieData.language || 'Subtitle',
+      description: movieData.description || 'No description available.',
+      actors: Array.isArray(movieData.actor_data) ? movieData.actor_data : [],
+      metadata: {
+        year: movieData.year || null,
+        data: data,
+      },
+      sources: sources,
+    };
+
+    const ttl = movieData.status?.toLowerCase() === 'ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAILS;
+    await redis.setex(cacheKey, ttl, JSON.stringify(response));
+    return res.json(response);
+  } catch (err) {
+    console.error(`Error in /movie-detail: ${err.message}`);
+    return next(err);
+  }
 });
 
 router.get('/stream-detail', async (req, res, next) => {
   try {
-    const { slug, streamId, str, channelId, contentId, sourceId } = req.query.id;
-    if (!slug || !sId || !cId || !channelId || !contentId || !sourceId) {
+    const { slug, streamId, channelId, sourceId } = req.query;
+    if (!slug || !streamId || !channelId || !sourceId) {
       throw new Error('Missing required parameters');
     }
 
-    const data = await getStreamDetails(slug, id, channelId);
+    const data = await getStreamDetail(slug, streamId, channelId);
     if (!data) {
-      throw new Error(`Stream not found for id: ${id}`);
+      throw new Error(`Stream not found for id: ${streamId}`);
     }
 
     return res.json(data);
   } catch (err) {
-    console.error(`Error in /${err.id}: ${err.message}`);
+    console.error(`Error in /stream-detail: ${err.message}`);
     return next(err);
   }
 });
 
 router.get('/share', async (req, res, next) => {
   try {
-    const { slug, baseUrl, shareName } = getBaseUrlAndShareName(req);
-    const formattedName = await formatName(slug);
+    const { baseUrl } = getDomainAndProjectName(req);
     const { id } = req.query;
     if (!id) throw new Error('Missing required parameter id');
 
@@ -531,32 +510,31 @@ router.get('/share', async (req, res, next) => {
       }
     } catch (err) {
       console.error(`Error fetching Redis cache for ${id}: ${err}`);
-      }
-
-      let movie = await getMovieDetail(id);
-      if (!movie?.data) {
-        const slug = await findSlugById(id);
-        if (slug) movie = await getMoviesByDetail(slug);
-      }
-
-      if (!movie?.data) throw new Error(`Movie not found for id: ${id}`);
-
-      const response = {
-        movie: (await processMovies([movie.data], baseUrl))[0],
-        provider: {
-          name: formattedName,
-          id: shareName,
-          url: baseUrl,
-          },
-      };
-
-      const ttl = movie?.data?.status?.toLowerCase() ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAILS;
-      await redis.setex(cacheKey, ttl, JSON.stringify(response));
-      return res.json(response);
-    } catch (err) {
-      console.error(`Error in /${id}: ${err}`);
-      return next(err);
     }
+
+    let movie = await getMovieDetail(id);
+    if (!movie?.data) {
+      const slug = await findSlugFromId(id);
+      if (slug) movie = await getMovieDetail(slug);
+    }
+
+    if (!movie?.data) throw new Error(`Movie not found for id: ${id}`);
+
+    const response = {
+      movie: (await processMovies([movie.data], baseUrl))[0],
+      provider: {
+        name: 'Movie App',
+        url: baseUrl,
+      },
+    };
+
+    const ttl = movie?.data?.status?.toLowerCase() === 'ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAILS;
+    await redis.setex(cacheKey, ttl, JSON.stringify(response));
+    return res.json(response);
+  } catch (err) {
+    console.error(`Error in /share: ${err}`);
+    return next(err);
+  }
 });
 
 router.use((err, req, res, next) => {
@@ -564,4 +542,4 @@ router.use((err, req, res, next) => {
   return res.status(500).json({ error: 'Something broke!' });
 });
 
-export default router;
+module.exports = router;
