@@ -56,6 +56,7 @@ async function processMovies(movies, baseUrl) {
       text: is_series ? 'Series' : 'Movie',
       dataKey: `${baseUrl}/${is_series ? 'movie_series' : 'movie_single'}`,
       data: { ...data, ...extraData }
+      },
     ...(detail.movieDetails?.category || movie.category || []).map(cat => ({
       '@type': 'default',
       type: 'movie',
