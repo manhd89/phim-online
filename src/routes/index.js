@@ -91,7 +91,7 @@ async function processMovies(movies, baseUrl) {
 }
 
 async function findSlugFromId(id) {
-  if (!id.match(/^[0-9a-f]{32})$/)) return null;
+  if (!id.match(/^[0-9a-f]{32}$/)) return null;
   const cacheKey = `movie_${id}`;
   try {
     const cachedSlug = await redis.get(cacheKey);
