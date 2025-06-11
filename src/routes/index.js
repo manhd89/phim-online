@@ -153,7 +153,6 @@ router.get('/', async (req, res, next) => {
       { key: 'china', fn: () => getMoviesByCountry('china', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Movies', url: '/country?china=movies' },
       { key: 'vietnam', fn: () => getMoviesByCountry('vn', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Movies', url: '/country?vn=movies' },
       { key: 'korea', fn: () => getMoviesByCountry('kr', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Movies', url: '/country?kr=movies' },
-      },
       { key: 'japan', fn: () => getMoviesByCountry('jp', 1, 8), ttl: TTL.NEW_MOVIES, name: 'movies', url: '/country?jp=movies' },
     ];
 
