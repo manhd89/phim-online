@@ -198,7 +198,7 @@ router.get('/', async (req, res, next) => {
       id: projectName,
       name: formattedName,
       url: baseUrl,
-      color: '#0f172a',
+      color: '#06b6d4',
       description: `${formattedName} - Thế giới giải trí đỉnh cao, mang đến trải nghiệm sống động và trọn vẹn mọi lúc, mọi nơi.`,
       image: { url: `${baseUrl}/public/logo.png` },
       grid_number: 3,
@@ -530,7 +530,7 @@ router.get('/share-movie', async (req, res, next) => {
         name: formattedName,
         id: projectName,
         url: baseUrl,
-        color: '#0f172a',
+        color: '#06b6d4',
         image: { url: `${baseUrl}/public/logo.png` },
       },
     };
