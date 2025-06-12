@@ -107,6 +107,7 @@ async function findSlugFromId(id) {
   const foundMovie = searchResult?.items?.find(item => item._id === id);
   if (foundMovie) {
     try {
+      // Default to MOVIE_DETAIL TTL, as status is unknown here
       await redis.set(cacheKey, foundMovie.slug, { ex: getTTL('movie_detail') });
     } catch (error) {
       console.error(`Redis set error for ${cacheKey}: ${error.message}`);
