@@ -13,7 +13,8 @@ const {
   getStreamDetail,
   getMultipleMovieDetails,
 } = require('../services/phimapi');
-const { redis, BASE_URL, TTL } = require('../config');
+const { redis, BASE_URL } = require('../config');
+const { getTTL } = require('../scripts/preCacheMovies');
 
 const getDomainAndProjectName = (req) => {
   let domain = req.headers.host || process.env.VERCEL_URL;
@@ -106,7 +107,7 @@ async function findSlugFromId(id) {
   const foundMovie = searchResult?.items?.find(item => item._id === id);
   if (foundMovie) {
     try {
-      await redis.set(cacheKey, foundMovie.slug, { ex: TTL.MOVIE_DETAIL });
+      await redis.set(cacheKey, foundMovie.slug, { ex: getTTL('movie_detail') });
     } catch (error) {
       console.error(`Redis set error for ${cacheKey}: ${error.message}`);
     }
@@ -115,13 +116,13 @@ async function findSlugFromId(id) {
   return null;
 }
 
-async function updateCachedMovies(cacheKey, newMovies, limit, ttl) {
+async function updateCachedMovies(cacheKey, newMovies, limit, ttlType) {
   try {
     let cachedMovies = (await redis.get(cacheKey)) || [];
     const newMovieIds = new Set(newMovies.map(m => m._id));
     cachedMovies = cachedMovies.filter(m => !newMovieIds.has(m.id));
     cachedMovies = [...newMovies, ...cachedMovies].slice(0, limit);
-    await redis.set(cacheKey, cachedMovies, { ex: ttl });
+    await redis.set(cacheKey, cachedMovies, { ex: getTTL(ttlType) });
     return cachedMovies;
   } catch (error) {
     console.error(`Error updating cache for ${cacheKey}: ${error.message}`);
@@ -143,19 +144,19 @@ router.get('/', async (req, res, next) => {
     }
 
     const fetchConfig = [
-      { key: 'series', fn: () => getMoviesByType('phim-bo', 1, 8), ttl: TTL.SERIES, name: 'Phim Bộ', url: '/series', display: 'slider' },
-      { key: 'single', fn: () => getMoviesByType('phim-le', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Phim Lẻ', url: '/single' },
-      { key: 'animation', fn: () => getMoviesByType('hoat-hinh', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Hoạt Hình', url: '/animation' },
-      { key: 'phim-long-tieng', fn: () => getMoviesByType('phim-long-tieng', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Phim Lồng Tiếng', url: '/phim-long-tieng' },
-      { key: 'phim-thuyet-minh', fn: () => getMoviesByType('phim-thuyet-minh', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Phim Thuyết Minh', url: '/phim-thuyet-minh' },
-      { key: 'tvshows', fn: () => getMoviesByType('tv-shows', 1, 8), ttl: TTL.NEW_MOVIES, name: 'TV Shows', url: '/tvshows' },
-      { key: 'hanh-dong', fn: () => getMoviesByCategory('hanh-dong', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Hành Động', url: '/category?uid=hanh-dong' },
-      { key: 'vien-tuong', fn: () => getMoviesByCategory('vien-tuong', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Viễn Tưởng', url: '/category?uid=vien-tuong' },
-      { key: 'au-my', fn: () => getMoviesByCountry('au-my', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Âu Mỹ', url: '/country?uid=au-my' },
-      { key: 'trung-quoc', fn: () => getMoviesByCountry('trung-quoc', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Trung Quốc', url: '/country?uid=trung-quoc' },
-      { key: 'viet-nam', fn: () => getMoviesByCountry('viet-nam', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Việt Nam', url: '/country?uid=viet-nam' },
-      { key: 'han-quoc', fn: () => getMoviesByCountry('han-quoc', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Hàn Quốc', url: '/country?uid=han-quoc' },
-      { key: 'nhat-ban', fn: () => getMoviesByCountry('nhat-ban', 1, 8), ttl: TTL.NEW_MOVIES, name: 'Nhật Bản', url: '/country?uid=nhat-ban' },
+      { key: 'series', fn: () => getMoviesByType('phim-bo', 1, 8), ttlType: 'series', name: 'Phim Bộ', url: '/series', display: 'slider' },
+      { key: 'single', fn: () => getMoviesByType('phim-le', 1, 8), ttlType: 'new_movies', name: 'Phim Lẻ', url: '/single' },
+      { key: 'animation', fn: () => getMoviesByType('hoat-hinh', 1, 8), ttlType: 'new_movies', name: 'Hoạt Hình', url: '/animation' },
+      { key: 'phim-long-tieng', fn: () => getMoviesByType('phim-long-tieng', 1, 8), ttlType: 'new_movies', name: 'Phim Lồng Tiếng', url: '/phim-long-tieng' },
+      { key: 'phim-thuyet-minh', fn: () => getMoviesByType('phim-thuyet-minh', 1, 8), ttlType: 'new_movies', name: 'Phim Thuyết Minh', url: '/phim-thuyet-minh' },
+      { key: 'tvshows', fn: () => getMoviesByType('tv-shows', 1, 8), ttlType: 'new_movies', name: 'TV Shows', url: '/tvshows' },
+      { key: 'hanh-dong', fn: () => getMoviesByCategory('hanh-dong', 1, 8), ttlType: 'new_movies', name: 'Hành Động', url: '/category?uid=hanh-dong' },
+      { key: 'vien-tuong', fn: () => getMoviesByCategory('vien-tuong', 1, 8), ttlType: 'new_movies', name: 'Viễn Tưởng', url: '/category?uid=vien-tuong' },
+      { key: 'au-my', fn: () => getMoviesByCountry('au-my', 1, 8), ttlType: 'new_movies', name: 'Âu Mỹ', url: '/country?uid=au-my' },
+      { key: 'trung-quoc', fn: () => getMoviesByCountry('trung-quoc', 1, 8), ttlType: 'new_movies', name: 'Trung Quốc', url: '/country?uid=trung-quoc' },
+      { key: 'viet-nam', fn: () => getMoviesByCountry('viet-nam', 1, 8), ttlType: 'new_movies', name: 'Việt Nam', url: '/country?uid=viet-nam' },
+      { key: 'han-quoc', fn: () => getMoviesByCountry('han-quoc', 1, 8), ttlType: 'new_movies', name: 'Hàn Quốc', url: '/country?uid=han-quoc' },
+      { key: 'nhat-ban', fn: () => getMoviesByCountry('nhat-ban', 1, 8), ttlType: 'new_movies', name: 'Nhật Bản', url: '/country?uid=nhat-ban' },
     ];
 
     const [categories, countries, ...rawData] = await Promise.all([
@@ -169,7 +170,7 @@ router.get('/', async (req, res, next) => {
         const raw = rawData[idx]?.items || [];
         const totalPages = rawData[idx]?.totalPages || 10;
         const cacheSubKey = `movieapp:${cfg.key}_${projectName}`;
-        const movies = await updateCachedMovies(cacheSubKey, raw, 8, cfg.ttl);
+        const movies = await updateCachedMovies(cacheSubKey, raw, 8, cfg.ttlType);
         const channels = await processMovies(movies, baseUrl);
         return {
           id: cfg.key.replace(/-/g, '_'),
@@ -232,7 +233,7 @@ router.get('/', async (req, res, next) => {
       option: { save_history: true, save_search_history: true, save_wishlist: true },
     };
 
-    await redis.set(cacheKey, response, { ex: TTL.HOMEPAGE });
+    await redis.set(cacheKey, response, { ex: getTTL('homepage') });
     res.json(response);
   } catch (error) {
     console.error(`Lỗi trong route homepage: ${error.message}`);
@@ -240,7 +241,7 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-const createMovieRoute = (path, fetchFunction, cachePrefix, ttl, extraParams = {}) => async (req, res, next) => {
+const createMovieRoute = (path, fetchFunction, cachePrefix, ttlType, extraParams = {}) => async (req, res, next) => {
   try {
     const { baseUrl } = getDomainAndProjectName(req);
     const { p = 1, s = 12, ...queryParams } = req.query;
@@ -282,8 +283,8 @@ const createMovieRoute = (path, fetchFunction, cachePrefix, ttl, extraParams = {
     }
 
     const processedMovies = await processMovies(items, baseUrl);
-    await redis.set(cacheKey, processedMovies, { ex: ttl });
-    await redis.set(`movieapp:total_pages_${cachePrefix}_${paramString}`, movies.totalPages || 1, { ex: ttl });
+    await redis.set(cacheKey, processedMovies, { ex: getTTL('processed_movies') });
+    await redis.set(`movieapp:total_pages_${cachePrefix}_${paramString}`, movies.totalPages || 1, { ex: getTTL('processed_movies') });
 
     res.json({
       channels: processedMovies,
@@ -307,19 +308,19 @@ const createMovieRoute = (path, fetchFunction, cachePrefix, ttl, extraParams = {
   }
 };
 
-router.get('/new', createMovieRoute('new', (page, limit) => getNewMovies(page, limit), 'new', TTL.NEW_MOVIES));
+router.get('/new', createMovieRoute('new', (page, limit) => getNewMovies(page, limit), 'new', 'new_movies'));
 
-router.get('/series', createMovieRoute('series', (page, limit) => getMoviesByType('phim-bo', page, limit), 'series', TTL.SERIES));
+router.get('/series', createMovieRoute('series', (page, limit) => getMoviesByType('phim-bo', page, limit), 'series', 'series'));
 
-router.get('/single', createMovieRoute('single', (page, limit) => getMoviesByType('phim-le', page, limit), 'single', TTL.NEW_MOVIES));
+router.get('/single', createMovieRoute('single', (page, limit) => getMoviesByType('phim-le', page, limit), 'single', 'new_movies'));
 
-router.get('/phim-long-tieng', createMovieRoute('phim-long-tieng', (page, limit) => getMoviesByType('phim-long-tieng', page, limit), 'phim-long-tieng', TTL.NEW_MOVIES));
+router.get('/phim-long-tieng', createMovieRoute('phim-long-tieng', (page, limit) => getMoviesByType('phim-long-tieng', page, limit), 'phim-long-tieng', 'new_movies'));
 
-router.get('/phim-thuyet-minh', createMovieRoute('phim-thuyet-minh', (page, limit) => getMoviesByType('phim-thuyet-minh', page, limit), 'phim-thuyet-minh', TTL.NEW_MOVIES));
+router.get('/phim-thuyet-minh', createMovieRoute('phim-thuyet-minh', (page, limit) => getMoviesByType('phim-thuyet-minh', page, limit), 'phim-thuyet-minh', 'new_movies'));
 
-router.get('/animation', createMovieRoute('animation', (page, limit) => getMoviesByType('hoat-hinh', page, limit), 'animation', TTL.NEW_MOVIES));
+router.get('/animation', createMovieRoute('animation', (page, limit) => getMoviesByType('hoat-hinh', page, limit), 'animation', 'new_movies'));
 
-router.get('/tvshows', createMovieRoute('tvshows', (page, limit) => getMoviesByType('tv-shows', page, limit), 'tvshows', TTL.NEW_MOVIES));
+router.get('/tvshows', createMovieRoute('tvshows', (page, limit) => getMoviesByType('tv-shows', page, limit), 'tvshows', 'new_movies'));
 
 router.get('/category', createMovieRoute(
   'category',
@@ -328,7 +329,7 @@ router.get('/category', createMovieRoute(
     return getMoviesByCategory(uid, page, limit);
   },
   'category',
-  TTL.NEW_MOVIES,
+  'new_movies',
   { uid: '' }
 ));
 
@@ -339,7 +340,7 @@ router.get('/country', createMovieRoute(
     return getMoviesByCountry(uid, page, limit);
   },
   'country',
-  TTL.NEW_MOVIES,
+  'new_movies',
   { uid: '' }
 ));
 
@@ -350,7 +351,7 @@ router.get('/search', createMovieRoute(
     return searchMovies(k, { page, limit });
   },
   'search',
-  TTL.NEW_MOVIES,
+  'search',
   { k: '' }
 ));
 
@@ -372,7 +373,7 @@ router.get('/suggest', async (req, res, next) => {
 
     const movies = await searchMovies(k, { limit: 5 });
     const suggestions = movies.items?.map(item => item.name || 'Unknown Title') || [];
-    await redis.set(cacheKey, suggestions, { ex: TTL.SUGGEST });
+    await redis.set(cacheKey, suggestions, { ex: getTTL('suggest') });
     res.json(suggestions);
   } catch (error) {
     console.error(`Lỗi trong /suggest: ${error.message}`);
@@ -403,7 +404,7 @@ router.get('/movie-detail', async (req, res, next) => {
       return res.status(404).json({ error: `Không tìm thấy phim cho uid: ${uid}` });
     }
 
-    await redis.set(`movieapp:movie_by_channel_${movie.movie._id}`, movie, { ex: TTL.MOVIE_DETAIL });
+    await redis.set(`movieapp:movie_by_channel_${movie.movie._id}`, movie, { ex: getTTL('movie_detail', movie.movie.status) });
 
     const isSeries = (movieData) => {
       const movieType = movieData.type || '';
@@ -469,7 +470,7 @@ router.get('/movie-detail', async (req, res, next) => {
       sources,
     };
 
-    await redis.set(cacheKey, response, { ex: movie.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL });
+    await redis.set(cacheKey, response, { ex: getTTL('movie_detail', movie.movie.status) });
     res.json(response);
   } catch (error) {
     console.error(`Lỗi trong /movie-detail: ${error.message}`);
@@ -533,7 +534,7 @@ router.get('/share-movie', async (req, res, next) => {
       },
     };
 
-    await redis.set(cacheKey, response, { ex: movie.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL });
+    await redis.set(cacheKey, response, { ex: getTTL('movie_detail', movie.movie.status) });
     res.json(response);
   } catch (error) {
     console.error(`Lỗi trong /share-movie: ${error.message}`);
