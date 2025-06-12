@@ -1,6 +1,6 @@
 // src/scripts/preCacheMovies.js
 const axios = require('axios');
-const { redis, BASE_URL, API_CONFIG, TTL } = require('../config');
+const { redis, BASE_URL, API_CONFIG } = require('../config');
 
 // Dynamically import p-limit
 let pLimit;
@@ -10,6 +10,49 @@ let pLimit;
 })();
 
 const PRECACHE_KEY_SET = 'movieapp:precached_keys';
+
+// Centralized TTL configuration (in seconds)
+const TTL = {
+  CATEGORIES: 30 * 24 * 60 * 60, // 30 days
+  COUNTRIES: 30 * 24 * 60 * 60, // 30 days
+  NEW_MOVIES: 6 * 60 * 60, // 6 hours
+  SERIES: 1 * 60 * 60, // 1 hour
+  MOVIE_DETAIL: 30 * 24 * 60 * 60, // 30 days
+  ONGOING_SERIES: 1 * 60 * 60, // 1 hour
+  PROCESSED_MOVIES: 1 * 60 * 60, // 1 hour
+  HOMEPAGE: 1 * 60 * 60, // 1 hour
+  SEARCH: 15 * 60, // 15 minutes
+  SUGGEST: 15 * 60, // 15 minutes
+  SLUGS: 24 * 60 * 60, // 24 hours
+};
+
+// Function to get TTL based on data type and optional movie status
+function getTTL(dataType, movieStatus = null) {
+  switch (dataType) {
+    case 'categories':
+      return TTL.CATEGORIES;
+    case 'countries':
+      return TTL.COUNTRIES;
+    case 'new_movies':
+      return TTL.NEW_MOVIES;
+    case 'series':
+      return TTL.SERIES;
+    case 'movie_detail':
+      return movieStatus === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+    case 'processed_movies':
+      return TTL.PROCESSED_MOVIES;
+    case 'homepage':
+      return TTL.HOMEPAGE;
+    case 'search':
+      return TTL.SEARCH;
+    case 'suggest':
+      return TTL.SUGGEST;
+    case 'slugs':
+      return TTL.SLUGS;
+    default:
+      return TTL.NEW_MOVIES; // Default fallback
+  }
+}
 
 async function fetchAllMovieSlugs() {
   const slugs = new Set();
@@ -43,7 +86,7 @@ async function fetchAllMovieSlugs() {
         .filter(item => new Date(item.modified?.time || 0) > new Date(lastUpdated))
         .map(item => item.slug)
         .filter(slug => slug && typeof slug === 'string');
-      await redis.set(cacheKey, pageSlugs, { ex: TTL.SLUGS });
+      await redis.set(cacheKey, pageSlugs, { ex: getTTL('slugs') });
 
       pageSlugs.forEach(slug => slugs.add(slug));
       if (page >= data.totalPages || !data.items.length) break;
@@ -55,7 +98,7 @@ async function fetchAllMovieSlugs() {
     }
   }
 
-  await redis.set(lastUpdatedKey, new Date().toISOString(), { ex: TTL.SLUGS });
+  await redis.set(lastUpdatedKey, new Date().toISOString(), { ex: getTTL('slugs') });
   return [...slugs];
 }
 
@@ -99,7 +142,7 @@ async function cacheMovieDetail(slug, retries = 3) {
         throw new Error('Invalid movie data');
       }
 
-      const ttl = data.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+      const ttl = getTTL('movie_detail', data.movie.status);
       try {
         await redis.set(cacheKey, data, { ex: ttl });
         await redis.set(`movieapp:id_to_slug_${data.movie._id}`, slug, { ex: ttl });
@@ -145,7 +188,7 @@ async function cacheStreamDetails(movieData, slug) {
       };
 
       try {
-        const ttl = movieData.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+        const ttl = getTTL('movie_detail', movieData.movie.status);
         await redis.set(cacheKey, response, { ex: ttl });
         await redis.sadd(PRECACHE_KEY_SET, cacheKey);
         console.log(`Cached stream detail: ${streamId}`);
@@ -208,8 +251,4 @@ async function preCacheMovies() {
   }
 }
 
-module.exports = { preCacheMovies, fetchAllMovieSlugs, cacheMovieDetail, cacheStreamDetails };
-
-if (require.main === module) {
-  preCacheMovies();
-}
+module.exports = { preCacheMovies, fetchAllMovieSlugs, cacheMovieDetail, cacheStreamDetails, getTTL };
