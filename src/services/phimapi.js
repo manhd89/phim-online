@@ -1,16 +1,16 @@
 // src/services/phimapi.js
 const axios = require('axios');
-const { redis, BASE_URL, API_CONFIG, TTL } = require('../config');
-const { cacheMovieDetail, cacheStreamDetails } = require('../scripts/preCacheMovies');
+const { redis, BASE_URL, API_CONFIG } = require('../config');
+const { cacheMovieDetail, cacheStreamDetails, getTTL } = require('../scripts/preCacheMovies');
 
 const PRECACHE_KEY_SET = 'movieapp:precached_keys';
 
 async function fetchApi(url, params = {}, retries = 3) {
   const cacheKey = `movieapp:api_${url}_${JSON.stringify(params)}`;
-  const ttl = url.includes('the-loai') ? TTL.CATEGORIES :
-              url.includes('quoc-gia') ? TTL.COUNTRIES :
-              url.includes('phim-moi-cap-nhat') ? TTL.NEW_MOVIES :
-              url.includes('phim-bo') ? TTL.SERIES : TTL.NEW_MOVIES;
+  const ttlType = url.includes('the-loai') ? 'categories' :
+                  url.includes('quoc-gia') ? 'countries' :
+                  url.includes('phim-moi-cap-nhat') ? 'new_movies' :
+                  url.includes('phim-bo') ? 'series' : 'new_movies';
 
   try {
     // Check pre-cache
@@ -62,7 +62,7 @@ async function fetchApi(url, params = {}, retries = 3) {
       }
       console.log(`Fetched ${url}: ${data.items.length} items`);
       try {
-        await redis.set(cacheKey, data, { ex: ttl });
+        await redis.set(cacheKey, data, { ex: getTTL(ttlType) });
         await redis.sadd(PRECACHE_KEY_SET, cacheKey);
       } catch (error) {
         console.error(`Redis set error for ${cacheKey}: ${error.message}`);
@@ -87,8 +87,8 @@ async function getCategories() {
   let data = await redis.get(dataKey);
   if (!data) {
     data = await fetchApi(`${BASE_URL}/the-loai`);
-    await redis.set(dataKey, data, { ex: TTL.CATEGORIES });
-    await redis.set(cacheKey, currentVersion, { ex: TTL.CATEGORIES });
+    await redis.set(dataKey, data, { ex: getTTL('categories') });
+    await redis.set(cacheKey, currentVersion, { ex: getTTL('categories') });
   }
   return Array.isArray(data) ? data : data.items || [];
 }
@@ -100,8 +100,8 @@ async function getCountries() {
   let data = await redis.get(dataKey);
   if (!data) {
     data = await fetchApi(`${BASE_URL}/quoc-gia`);
-    await redis.set(dataKey, data, { ex: TTL.COUNTRIES });
-    await redis.set(cacheKey, currentVersion, { ex: TTL.COUNTRIES });
+    await redis.set(dataKey, data, { ex: getTTL('countries') });
+    await redis.set(cacheKey, currentVersion, { ex: getTTL('countries') });
   }
   return Array.isArray(data) ? data : data.items || [];
 }
@@ -217,7 +217,7 @@ async function getStreamDetail(slug, streamId, channelId) {
     ],
   };
 
-  const ttl = movie.movie.status === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+  const ttl = getTTL('movie_detail', movie.movie.status);
   await redis.set(cacheKey, response, { ex: ttl });
   await redis.sadd(PRECACHE_KEY_SET, cacheKey);
   return response;
