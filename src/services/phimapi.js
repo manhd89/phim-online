@@ -140,7 +140,6 @@ async function getMovieDetail(slug, forceRefresh = false, retries = 3) {
 
   const cacheKey = `movieapp:movie_${slug}`;
   try {
-    // Check pre-cache or regular cache
     if (!forceRefresh && (await redis.sismember(PRECACHE_KEY_SET, cacheKey))) {
       const cached = await redis.get(cacheKey);
       if (cached) {
@@ -150,7 +149,7 @@ async function getMovieDetail(slug, forceRefresh = false, retries = 3) {
     }
 
     const cached = await redis.get(cacheKey);
-    if (cached && !forceRefresh) {
+    if (cached && !forceRefresh && cached.movie?.status?.toLowerCase() !== 'ongoing') {
       console.log(`Cache hit for ${slug}`);
       return cached;
     }
@@ -158,14 +157,12 @@ async function getMovieDetail(slug, forceRefresh = false, retries = 3) {
     console.error(`Redis get error for ${cacheKey}: ${error.message}`);
   }
 
-  // Fetch online and cache
   return await cacheMovieDetail(slug, retries);
 }
 
 async function getStreamDetail(slug, streamId, channelId) {
   const cacheKey = `movieapp:stream_detail_${streamId}`;
   try {
-    // Check pre-cache or regular cache
     if (await redis.sismember(PRECACHE_KEY_SET, cacheKey)) {
       const cached = await redis.get(cacheKey);
       if (cached) {
@@ -183,7 +180,6 @@ async function getStreamDetail(slug, streamId, channelId) {
     console.error(`Redis get error for ${cacheKey}: ${error.message}`);
   }
 
-  // Fetch movie details
   const movie = await getMovieDetail(slug, true);
   if (!movie?.movie) {
     console.error(`No movie found for slug: ${slug}`);
@@ -220,6 +216,7 @@ async function getStreamDetail(slug, streamId, channelId) {
   const ttl = getTTL('movie_detail', movie.movie.status);
   await redis.set(cacheKey, response, { ex: ttl });
   await redis.sadd(PRECACHE_KEY_SET, cacheKey);
+  console.log(`Cached stream detail ${streamId} with TTL ${ttl} seconds`);
   return response;
 }
 
@@ -229,7 +226,7 @@ async function getMultipleMovieDetails(slugs) {
     const results = await redis.mget(...cacheKeys);
 
     const movieDetails = results.map((data, index) => {
-      if (data) {
+      if (data && data.movie?.status?.toLowerCase() !== 'ongoing') {
         console.log(`Cache hit for movie_${slugs[index]}`);
         return data;
       }
