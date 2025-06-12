@@ -38,7 +38,7 @@ function getTTL(dataType, movieStatus = null) {
     case 'series':
       return TTL.SERIES;
     case 'movie_detail':
-      return movieStatus === 'Ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+      return movieStatus && movieStatus.toLowerCase() === 'ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
     case 'processed_movies':
       return TTL.PROCESSED_MOVIES;
     case 'homepage':
@@ -124,7 +124,7 @@ async function cacheMovieDetail(slug, retries = 3) {
   const cacheKey = `movieapp:movie_${slug}`;
   try {
     const cached = await redis.get(cacheKey);
-    if (cached && cached.movie?.status !== 'Ongoing') {
+    if (cached && cached.movie?.status?.toLowerCase() !== 'ongoing') {
       console.log(`Cache hit for ${cacheKey}`);
       return cached;
     }
@@ -147,7 +147,7 @@ async function cacheMovieDetail(slug, retries = 3) {
         await redis.set(cacheKey, data, { ex: ttl });
         await redis.set(`movieapp:id_to_slug_${data.movie._id}`, slug, { ex: ttl });
         await redis.sadd(PRECACHE_KEY_SET, cacheKey);
-        console.log(`Cached movie: ${slug}`);
+        console.log(`Cached movie: ${slug} with TTL ${ttl} seconds`);
 
         // Cache stream details
         await cacheStreamDetails(data, slug);
@@ -191,7 +191,7 @@ async function cacheStreamDetails(movieData, slug) {
         const ttl = getTTL('movie_detail', movieData.movie.status);
         await redis.set(cacheKey, response, { ex: ttl });
         await redis.sadd(PRECACHE_KEY_SET, cacheKey);
-        console.log(`Cached stream detail: ${streamId}`);
+        console.log(`Cached stream detail: ${streamId} with TTL ${ttl} seconds`);
       } catch (error) {
         console.error(`Redis set error for ${cacheKey}: ${error.message}`);
       }
@@ -208,6 +208,12 @@ async function verifyCacheData(slugs) {
       if (!data || !data.movie || !validateMovieData(data.movie)) {
         console.error(`Verification failed for ${slug}`);
         errors++;
+      } else if (data.movie.status?.toLowerCase() === 'ongoing') {
+        const ttl = await redis.ttl(cacheKey);
+        if (ttl > TTL.ONGOING_SERIES) {
+          console.error(`Incorrect TTL for ongoing movie ${slug}: ${ttl} seconds`);
+          errors++;
+        }
       }
     } catch (error) {
       console.error(`Redis error for ${slug}: ${error.message}`);
