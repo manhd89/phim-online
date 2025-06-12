@@ -1,6 +1,6 @@
 // src/scripts/preCacheMovies.js
 const axios = require('axios');
-const { redis, BASE_URL, API_CONFIG } = require('../config');
+const { redis, BASE_URL, API_CONFIG , TTL } = require('../config');
 
 // Dynamically import p-limit
 let pLimit;
@@ -10,21 +10,6 @@ let pLimit;
 })();
 
 const PRECACHE_KEY_SET = 'movieapp:precached_keys';
-
-// Centralized TTL configuration (in seconds)
-const TTL = {
-  CATEGORIES: 30 * 24 * 60 * 60, // 30 days
-  COUNTRIES: 30 * 24 * 60 * 60, // 30 days
-  NEW_MOVIES: 6 * 60 * 60, // 6 hours
-  SERIES: 1 * 60 * 60, // 1 hour
-  MOVIE_DETAIL: 30 * 24 * 60 * 60, // 30 days
-  ONGOING_SERIES: 1 * 60 * 60, // 1 hour
-  PROCESSED_MOVIES: 1 * 60 * 60, // 1 hour
-  HOMEPAGE: 1 * 60 * 60, // 1 hour
-  SEARCH: 15 * 60, // 15 minutes
-  SUGGEST: 15 * 60, // 15 minutes
-  SLUGS: 24 * 60 * 60, // 24 hours
-};
 
 // Function to get TTL based on data type and optional movie status
 function getTTL(dataType, movieStatus = null) {
