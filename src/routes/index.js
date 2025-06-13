@@ -1,4 +1,3 @@
-// src/routes/index.js
 const express = require('express');
 const router = express.Router();
 const {
@@ -52,6 +51,10 @@ async function processMovies(movies, baseUrl) {
 
   return movies.map((movie, index) => {
     const detail = movieDetails[index] || { movie: {}, episodes: [] };
+    if (detail.error) {
+      console.warn(`Skipping movie ${movie.slug} due to: ${detail.error}`);
+      return null;
+    }
     const movieType = detail.movie.type || movie.type || '';
     const is_series = isSeries(movie, detail);
     
@@ -90,7 +93,7 @@ async function processMovies(movies, baseUrl) {
       year: detail.movie.year || movie.year || null,
       tags,
     };
-  });
+  }).filter(item => item !== null);
 }
 
 async function findSlugFromId(id) {
@@ -107,7 +110,6 @@ async function findSlugFromId(id) {
   const foundMovie = searchResult?.items?.find(item => item._id === id);
   if (foundMovie) {
     try {
-      // Default to MOVIE_DETAIL TTL, as status is unknown here
       await redis.set(cacheKey, foundMovie.slug, { ex: getTTL('movie_detail') });
     } catch (error) {
       console.error(`Redis set error for ${cacheKey}: ${error.message}`);
@@ -260,7 +262,7 @@ const createMovieRoute = (path, fetchFunction, cachePrefix, ttlType, extraParams
           channels: cachedMovies,
           load_more: {
             remote_data: {
-              url: `${baseUrl}/${path}${paramString ? `?${Object.entries(queryParams).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')}` : ''}`,
+              url: '',
               external: false,
             },
             paging: { page_key: 'p', size_key: 's' },
@@ -399,13 +401,12 @@ router.get('/movie-detail', async (req, res, next) => {
       console.error(`Lỗi Redis get cho ${cacheKey}: ${error.message}`);
     }
 
-    const movie = await getMovieDetail(uid, false); // Sử dụng forceRefresh = false
-    if (!movie?.movie) {
-      console.error(`Không tìm thấy phim cho uid: ${uid}`);
-      return res.status(404).json({ error: movie.error || `Không tìm thấy phim cho uid: ${uid}` });
+    const movie = await getMovieDetail(uid, false); // Không force refresh
+    if (!movie?.movie || movie.error) {
+      console.error(`Không tìm thấy phim cho uid: ${uid} - ${movie.error || 'Unknown error'}`);
+      return res.status(404).json({ error: `Phim hiện không khả dụng, vui lòng thử lại sau.` });
     }
 
-    // Lưu vào cache cho response của endpoint
     await redis.set(`movieapp:movie_by_channel_${movie.movie._id}`, movie, { ex: getTTL('movie_detail', movie.movie.status) });
 
     const isSeries = (movieData) => {
@@ -517,13 +518,15 @@ router.get('/share-movie', async (req, res, next) => {
       console.error(`Redis get error for ${cacheKey}: ${error.message}`);
     }
 
-    let movie = await getMovieDetail(uid);
-    if (!movie?.movie) {
+    let movie = await getMovieDetail(uid, false); // Không force refresh
+    if (!movie?.movie && movie.error) {
       const slug = await findSlugFromId(uid);
-      if (slug) movie = await getMovieDetail(slug);
+      if (slug) movie = await getMovieDetail(slug, false);
     }
 
-    if (!movie?.movie) return res.status(404).json({ error: `Không tìm thấy phim cho uid: ${uid}` });
+    if (!movie?.movie || movie.error) {
+      return res.status(404).json({ error: `Phim hiện không khả dụng, vui lòng thử lại sau.` });
+    }
 
     const response = {
       channel: (await processMovies([movie.movie], baseUrl))[0],
