@@ -160,9 +160,15 @@ async function getMovieDetail(slug, forceRefresh = false, retries = 3) {
   return await cacheMovieDetail(slug, retries);
 }
 
-async function getStreamDetail(slug, streamId, channelId) {
-  const cacheKey = `movieapp:stream_detail_${streamId}`;
+async function getMovieDetail(slug, forceRefresh = false, retries = 3) {
+  if (!slug || typeof slug !== 'string' || slug.includes('/')) {
+    console.error(`Invalid slug: ${slug}`);
+    return { movie: null, episodes: [] };
+  }
+
+  const cacheKey = `movieapp:movie_${slug}`;
   try {
+    // Kiểm tra pre-cache
     if (await redis.sismember(PRECACHE_KEY_SET, cacheKey)) {
       const cached = await redis.get(cacheKey);
       if (cached) {
@@ -171,53 +177,20 @@ async function getStreamDetail(slug, streamId, channelId) {
       }
     }
 
+    // Kiểm tra cache thông thường
     const cached = await redis.get(cacheKey);
     if (cached) {
-      console.log(`Cache hit for ${cacheKey}`);
+      console.log(`Cache hit for ${slug}`);
       return cached;
     }
+
+    // Nếu không có dữ liệu trong cache, trả về lỗi thay vì fetch
+    console.error(`No cached data found for ${slug}`);
+    return { movie: null, episodes: [], error: `No cached data for ${slug}` };
   } catch (error) {
     console.error(`Redis get error for ${cacheKey}: ${error.message}`);
+    return { movie: null, episodes: [], error: `Redis error: ${error.message}` };
   }
-
-  const movie = await getMovieDetail(slug, true);
-  if (!movie?.movie) {
-    console.error(`No movie found for slug: ${slug}`);
-    return null;
-  }
-
-  const [movieId, serverIndexStr, episodeIndexStr] = streamId.split('_');
-  const serverIndex = parseInt(serverIndexStr, 10);
-  const episodeIndex = parseInt(episodeIndexStr, 10);
-
-  if (movieId !== movie.movie._id || isNaN(serverIndex) || isNaN(episodeIndex)) {
-    console.error(`Invalid streamId format: ${streamId}`);
-    return null;
-  }
-
-  const episode = movie.episodes?.[serverIndex]?.server_data?.[episodeIndex];
-  if (!episode) {
-    console.error(`No episode found for streamId: ${streamId}`);
-    return null;
-  }
-
-  const response = {
-    stream_links: [
-      {
-        id: `default_${movieId}_${serverIndex}_${episodeIndex}`,
-        name: episode.name || `Episode ${episodeIndex + 1}`,
-        type: 'hls',
-        default: false,
-        url: episode.link_m3u8 || '',
-      },
-    ],
-  };
-
-  const ttl = getTTL('movie_detail', movie.movie.status);
-  await redis.set(cacheKey, response, { ex: ttl });
-  await redis.sadd(PRECACHE_KEY_SET, cacheKey);
-  console.log(`Cached stream detail ${streamId} with TTL ${ttl} seconds`);
-  return response;
 }
 
 async function getMultipleMovieDetails(slugs) {
