@@ -1,4 +1,3 @@
-// src/services/phimapi.js
 const axios = require('axios');
 const { redis, BASE_URL, API_CONFIG } = require('../config');
 const { cacheMovieDetail, cacheStreamDetails, getTTL } = require('../scripts/preCacheMovies');
@@ -135,35 +134,7 @@ async function searchMovies(keyword, params = {}) {
 async function getMovieDetail(slug, forceRefresh = false, retries = 3) {
   if (!slug || typeof slug !== 'string' || slug.includes('/')) {
     console.error(`Invalid slug: ${slug}`);
-    return { movie: null, episodes: [] };
-  }
-
-  const cacheKey = `movieapp:movie_${slug}`;
-  try {
-    if (!forceRefresh && (await redis.sismember(PRECACHE_KEY_SET, cacheKey))) {
-      const cached = await redis.get(cacheKey);
-      if (cached) {
-        console.log(`Pre-cache hit for ${cacheKey}`);
-        return cached;
-      }
-    }
-
-    const cached = await redis.get(cacheKey);
-    if (cached && !forceRefresh && cached.movie?.status?.toLowerCase() !== 'ongoing') {
-      console.log(`Cache hit for ${slug}`);
-      return cached;
-    }
-  } catch (error) {
-    console.error(`Redis get error for ${cacheKey}: ${error.message}`);
-  }
-
-  return await cacheMovieDetail(slug, retries);
-}
-
-async function getMovieDetail(slug, forceRefresh = false, retries = 3) {
-  if (!slug || typeof slug !== 'string' || slug.includes('/')) {
-    console.error(`Invalid slug: ${slug}`);
-    return { movie: null, episodes: [] };
+    return { movie: null, episodes: [], error: 'Invalid slug' };
   }
 
   const cacheKey = `movieapp:movie_${slug}`;
@@ -184,13 +155,73 @@ async function getMovieDetail(slug, forceRefresh = false, retries = 3) {
       return cached;
     }
 
-    // Nếu không có dữ liệu trong cache, trả về lỗi thay vì fetch
+    // Không fetch từ server, trả về lỗi nếu không có dữ liệu trong cache
     console.error(`No cached data found for ${slug}`);
     return { movie: null, episodes: [], error: `No cached data for ${slug}` };
   } catch (error) {
     console.error(`Redis get error for ${cacheKey}: ${error.message}`);
     return { movie: null, episodes: [], error: `Redis error: ${error.message}` };
   }
+}
+
+async function getStreamDetail(slug, streamId, channelId) {
+  const cacheKey = `movieapp:stream_detail_${streamId}`;
+  try {
+    if (await redis.sismember(PRECACHE_KEY_SET, cacheKey)) {
+      const cached = await redis.get(cacheKey);
+      if (cached) {
+        console.log(`Pre-cache hit for ${cacheKey}`);
+        return cached;
+      }
+    }
+
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      console.log(`Cache hit for ${cacheKey}`);
+      return cached;
+    }
+  } catch (error) {
+    console.error(`Redis get error for ${cacheKey}: ${error.message}`);
+  }
+
+  const movie = await getMovieDetail(slug, false); // Không force refresh
+  if (!movie?.movie || movie.error) {
+    console.error(`No movie found for slug: ${slug} - ${movie.error || 'Unknown error'}`);
+    return null;
+  }
+
+  const [movieId, serverIndexStr, episodeIndexStr] = streamId.split('_');
+  const serverIndex = parseInt(serverIndexStr, 10);
+  const episodeIndex = parseInt(episodeIndexStr, 10);
+
+  if (movieId !== movie.movie._id || isNaN(serverIndex) || isNaN(episodeIndex)) {
+    console.error(`Invalid streamId format: ${streamId}`);
+    return null;
+  }
+
+  const episode = movie.episodes?.[serverIndex]?.server_data?.[episodeIndex];
+  if (!episode) {
+    console.error(`No episode found for streamId: ${streamId}`);
+    return null;
+  }
+
+  const response = {
+    stream_links: [
+      {
+        id: `default_${movieId}_${serverIndex}_${episodeIndex}`,
+        name: episode.name || `Episode ${episodeIndex + 1}`,
+        type: 'hls',
+        default: false,
+        url: episode.link_m3u8 || '',
+      },
+    ],
+  };
+
+  const ttl = getTTL('movie_detail', movie.movie.status);
+  await redis.set(cacheKey, response, { ex: ttl });
+  await redis.sadd(PRECACHE_KEY_SET, cacheKey);
+  console.log(`Cached stream detail ${streamId} with TTL ${ttl} seconds`);
+  return response;
 }
 
 async function getMultipleMovieDetails(slugs) {
@@ -203,21 +234,13 @@ async function getMultipleMovieDetails(slugs) {
         console.log(`Cache hit for movie_${slugs[index]}`);
         return data;
       }
-      return null;
+      return { movie: null, episodes: [], error: `No cached data for ${slugs[index]}` };
     });
 
-    const missingSlugs = slugs.filter((slug, index) => !movieDetails[index]);
-    if (missingSlugs.length > 0) {
-      const fetchedDetails = await Promise.all(missingSlugs.map(slug => cacheMovieDetail(slug)));
-      fetchedDetails.forEach((data, index) => {
-        const slugIndex = slugs.indexOf(missingSlugs[index]);
-        movieDetails[slugIndex] = data;
-      });
-    }
     return movieDetails;
   } catch (error) {
     console.error(`Redis mget error: ${error.message}`);
-    return Promise.all(slugs.map(slug => cacheMovieDetail(slug)));
+    return slugs.map(slug => ({ movie: null, episodes: [], error: `Redis error for ${slug}` }));
   }
 }
 
