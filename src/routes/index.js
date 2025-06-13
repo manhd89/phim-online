@@ -399,12 +399,13 @@ router.get('/movie-detail', async (req, res, next) => {
       console.error(`Lỗi Redis get cho ${cacheKey}: ${error.message}`);
     }
 
-    const movie = await getMovieDetail(uid, true);
+    const movie = await getMovieDetail(uid, false); // Sử dụng forceRefresh = false
     if (!movie?.movie) {
       console.error(`Không tìm thấy phim cho uid: ${uid}`);
-      return res.status(404).json({ error: `Không tìm thấy phim cho uid: ${uid}` });
+      return res.status(404).json({ error: movie.error || `Không tìm thấy phim cho uid: ${uid}` });
     }
 
+    // Lưu vào cache cho response của endpoint
     await redis.set(`movieapp:movie_by_channel_${movie.movie._id}`, movie, { ex: getTTL('movie_detail', movie.movie.status) });
 
     const isSeries = (movieData) => {
