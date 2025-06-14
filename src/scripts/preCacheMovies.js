@@ -1,6 +1,7 @@
-// src/scripts/preCacheMovies.js
+// src/scripts/preCacheMovies.js 
+
 const axios = require('axios');
-const { redis, BASE_URL, API_CONFIG , TTL } = require('../config');
+const { redis, BASE_URL, API_CONFIG, TTL } = require('../config');
 
 // Dynamically import p-limit
 let pLimit;
@@ -23,7 +24,7 @@ function getTTL(dataType, movieStatus = null) {
     case 'series':
       return TTL.SERIES;
     case 'movie_detail':
-      return movieStatus && movieStatus.toLowerCase() === 'ongoing' ? TTL.ONGOING_SERIES : TTL.MOVIE_DETAIL;
+      return null; // Không đặt TTL cho chi tiết phim
     case 'processed_movies':
       return TTL.PROCESSED_MOVIES;
     case 'homepage':
@@ -109,7 +110,22 @@ async function cacheMovieDetail(slug, retries = 3) {
   const cacheKey = `movieapp:movie_${slug}`;
   try {
     const cached = await redis.get(cacheKey);
-    if (cached && cached.movie?.status?.toLowerCase() !== 'ongoing') {
+    if (cached) {
+      console.log(`Cache hit for ${cacheKey}`);
+      return cached;
+    }
+  } catch (error) {
+    console.error(`Redis get error for ${cacheKey}: ${error.message}`);
+  }
+
+  let attempt = 0;
+  while (attempt < retries) {
+    try {
+      const response = await axios.get(`${BASE_URL}/ph (movie) {
+  const cacheKey = `movieapp:movie_${slug}`;
+  try {
+    const cached = await redis.get(cacheKey);
+    if (cached) {
       console.log(`Cache hit for ${cacheKey}`);
       return cached;
     }
@@ -127,12 +143,11 @@ async function cacheMovieDetail(slug, retries = 3) {
         throw new Error('Invalid movie data');
       }
 
-      const ttl = getTTL('movie_detail', data.movie.status);
       try {
-        await redis.set(cacheKey, data, { ex: ttl });
-        await redis.set(`movieapp:id_to_slug_${data.movie._id}`, slug, { ex: ttl });
+        await redis.set(cacheKey, data); // Bỏ tham số ex
+        await redis.set(`movieapp:id_to_slug_${data.movie._id}`, slug); // Bỏ tham số ex
         await redis.sadd(PRECACHE_KEY_SET, cacheKey);
-        console.log(`Cached movie: ${slug} with TTL ${ttl} seconds`);
+        console.log(`Cached movie: ${slug} without expiration`);
 
         // Cache stream details
         await cacheStreamDetails(data, slug);
@@ -173,10 +188,9 @@ async function cacheStreamDetails(movieData, slug) {
       };
 
       try {
-        const ttl = getTTL('movie_detail', movieData.movie.status);
-        await redis.set(cacheKey, response, { ex: ttl });
+        await redis.set(cacheKey, response); // Bỏ tham số ex
         await redis.sadd(PRECACHE_KEY_SET, cacheKey);
-        console.log(`Cached stream detail: ${streamId} with TTL ${ttl} seconds`);
+        console.log(`Cached stream detail: ${streamId} without expiration`);
       } catch (error) {
         console.error(`Redis set error for ${cacheKey}: ${error.message}`);
       }
@@ -193,12 +207,6 @@ async function verifyCacheData(slugs) {
       if (!data || !data.movie || !validateMovieData(data.movie)) {
         console.error(`Verification failed for ${slug}`);
         errors++;
-      } else if (data.movie.status?.toLowerCase() === 'ongoing') {
-        const ttl = await redis.ttl(cacheKey);
-        if (ttl > TTL.ONGOING_SERIES) {
-          console.error(`Incorrect TTL for ongoing movie ${slug}: ${ttl} seconds`);
-          errors++;
-        }
       }
     } catch (error) {
       console.error(`Redis error for ${slug}: ${error.message}`);
