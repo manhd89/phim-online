@@ -121,22 +121,7 @@ async function cacheMovieDetail(slug, retries = 3) {
   let attempt = 0;
   while (attempt < retries) {
     try {
-      const response = await axios.get(`${BASE_URL}/ph (movie) {
-  const cacheKey = `movieapp:movie_${slug}`;
-  try {
-    const cached = await redis.get(cacheKey);
-    if (cached) {
-      console.log(`Cache hit for ${cacheKey}`);
-      return cached;
-    }
-  } catch (error) {
-    console.error(`Redis get error for ${cacheKey}: ${error.message}`);
-  }
-
-  let attempt = 0;
-  while (attempt < retries) {
-    try {
-      const response = await axios.get(`${BASE_URL}/phim/${slug}`, API_CONFIG);
+      const response = await axios.get(`${BASE_URL}/phim/${slug}`, API_CONFIG); // Fixed syntax error
       const data = response.data || { movie: null, episodes: [] };
       if (!data.movie || !validateMovieData(data.movie)) {
         console.error(`Invalid data for ${slug}`);
